@@ -8,45 +8,135 @@ import (
 	"strings"
 	"time"
 
+	"ecochitas/internal/auth"
 	"ecochitas/internal/domain"
 	"ecochitas/internal/realtime"
 	"ecochitas/internal/storage"
 )
 
 type Api_handler struct {
-	bin_repository            *storage.Bin_repository
-	truck_position_repository *storage.Truck_position_repository
-	recycling_zone_repository *storage.Recycling_zone_repository
-	truck_position_stream     *realtime.Truck_position_stream
-	application_logger        *slog.Logger
+	bin_repository              *storage.Bin_repository
+	truck_position_repository   *storage.Truck_position_repository
+	route_repository            route_service
+	recycling_zone_repository   *storage.Recycling_zone_repository
+	operations_repository       operations_service
+	truck_position_stream       *realtime.Truck_position_stream
+	operations_event_publisher  operations_event_publisher_service
+	jwt_authenticator           *auth.Jwt_authenticator
+	auth_enable_dev_token_issue bool
+	application_logger          *slog.Logger
 }
 
 func New_api_handler(
 	bin_repository *storage.Bin_repository,
 	truck_position_repository *storage.Truck_position_repository,
+	route_repository route_service,
 	recycling_zone_repository *storage.Recycling_zone_repository,
+	operations_repository operations_service,
 	truck_position_stream *realtime.Truck_position_stream,
+	operations_event_publisher operations_event_publisher_service,
+	jwt_authenticator *auth.Jwt_authenticator,
+	auth_enable_dev_token_issue bool,
 	application_logger *slog.Logger,
 ) *Api_handler {
 	return &Api_handler{
-		bin_repository:            bin_repository,
-		truck_position_repository: truck_position_repository,
-		recycling_zone_repository: recycling_zone_repository,
-		truck_position_stream:     truck_position_stream,
-		application_logger:        application_logger,
+		bin_repository:              bin_repository,
+		truck_position_repository:   truck_position_repository,
+		route_repository:            route_repository,
+		recycling_zone_repository:   recycling_zone_repository,
+		operations_repository:       operations_repository,
+		truck_position_stream:       truck_position_stream,
+		operations_event_publisher:  operations_event_publisher,
+		jwt_authenticator:           jwt_authenticator,
+		auth_enable_dev_token_issue: auth_enable_dev_token_issue,
+		application_logger:          application_logger,
 	}
 }
 
 func (api_handler *Api_handler) Register_routes(http_multiplexer *http.ServeMux) {
 	http_multiplexer.HandleFunc("GET /healthz", api_handler.handle_health_check)
+	http_multiplexer.HandleFunc("GET /v1/auth/me", api_handler.with_required_roles(
+		[]string{"citizen", "driver", "admin", "condominium_admin"},
+		api_handler.handle_get_authenticated_profile,
+	))
+	if api_handler.auth_enable_dev_token_issue {
+		http_multiplexer.HandleFunc("POST /v1/auth/dev-token", api_handler.handle_issue_dev_access_token)
+	}
 	http_multiplexer.HandleFunc("GET /v1/bins", api_handler.handle_list_bins)
+	http_multiplexer.HandleFunc("GET /v1/collection-routes", api_handler.handle_list_collection_routes)
+	http_multiplexer.HandleFunc("GET /v1/collection-routes/{route_identifier}/stops", api_handler.handle_list_route_stops_by_route_identifier)
+	http_multiplexer.HandleFunc("POST /v1/admin/collection-routes", api_handler.with_required_roles(
+		[]string{"admin"},
+		api_handler.handle_create_collection_route,
+	))
+	http_multiplexer.HandleFunc("PATCH /v1/admin/collection-routes/{route_identifier}", api_handler.with_required_roles(
+		[]string{"admin"},
+		api_handler.handle_update_collection_route,
+	))
+	http_multiplexer.HandleFunc("PUT /v1/admin/collection-routes/{route_identifier}/stops", api_handler.with_required_roles(
+		[]string{"admin"},
+		api_handler.handle_sync_route_stops,
+	))
+	http_multiplexer.HandleFunc("GET /v1/admin/collection-routes/{route_identifier}/revisions", api_handler.with_required_roles(
+		[]string{"admin"},
+		api_handler.handle_list_collection_route_revisions,
+	))
+	http_multiplexer.HandleFunc("POST /v1/admin/truck-route-assignments", api_handler.with_required_roles(
+		[]string{"admin"},
+		api_handler.handle_create_truck_route_assignment,
+	))
+	http_multiplexer.HandleFunc("GET /v1/admin/truck-route-assignments", api_handler.with_required_roles(
+		[]string{"admin"},
+		api_handler.handle_list_truck_route_assignments,
+	))
+	http_multiplexer.HandleFunc("GET /v1/admin/route-deviation-alerts", api_handler.with_required_roles(
+		[]string{"admin"},
+		api_handler.handle_list_route_deviation_alerts,
+	))
 	http_multiplexer.HandleFunc("GET /v1/trucks/latest-position", api_handler.handle_get_latest_truck_position)
 	http_multiplexer.HandleFunc("GET /v1/trucks/latest-positions", api_handler.handle_list_latest_truck_positions)
 	http_multiplexer.HandleFunc("GET /v1/trucks/stream", api_handler.handle_stream_truck_positions)
+	http_multiplexer.HandleFunc("GET /v1/driver/route-deviation", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_get_truck_route_deviation,
+	))
+	http_multiplexer.HandleFunc("POST /v1/driver/route-deviation-alerts", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_create_route_deviation_alert,
+	))
+	http_multiplexer.HandleFunc("POST /v1/bins/sensor-events", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_ingest_bin_sensor_event,
+	))
+	http_multiplexer.HandleFunc("POST /v1/driver/collection-events", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_record_driver_collection_event,
+	))
+	http_multiplexer.HandleFunc("POST /v1/driver/route-blockages", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_create_route_blockage_report,
+	))
+	http_multiplexer.HandleFunc("GET /v1/driver/route-blockages", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_list_route_blockage_reports,
+	))
+	http_multiplexer.HandleFunc("PATCH /v1/driver/route-blockages/{blockage_identifier}", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_update_route_blockage_report_status,
+	))
 	http_multiplexer.HandleFunc("GET /v1/recycling/containers", api_handler.handle_list_zone_recycling_containers)
-	http_multiplexer.HandleFunc("POST /v1/recycling/cycles/start", api_handler.handle_start_recycling_collection_cycle)
-	http_multiplexer.HandleFunc("POST /v1/recycling/evidence-submissions", api_handler.handle_submit_recycling_evidence)
-	http_multiplexer.HandleFunc("POST /v1/recycling/cycles/close", api_handler.handle_close_recycling_collection_cycle)
+	http_multiplexer.HandleFunc("POST /v1/recycling/cycles/start", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_start_recycling_collection_cycle,
+	))
+	http_multiplexer.HandleFunc("POST /v1/recycling/evidence-submissions", api_handler.with_required_roles(
+		[]string{"citizen", "driver", "admin", "condominium_admin"},
+		api_handler.handle_submit_recycling_evidence,
+	))
+	http_multiplexer.HandleFunc("POST /v1/recycling/cycles/close", api_handler.with_required_roles(
+		[]string{"driver", "admin"},
+		api_handler.handle_close_recycling_collection_cycle,
+	))
 	http_multiplexer.HandleFunc("GET /v1/recycling/cycles/summary", api_handler.handle_get_recycling_cycle_summary)
 }
 
@@ -57,6 +147,68 @@ func (api_handler *Api_handler) handle_health_check(response_writer http.Respons
 		"timestamp": time.Now().UTC(),
 	}
 	write_json_response(response_writer, http.StatusOK, health_response_payload)
+}
+
+func (api_handler *Api_handler) handle_get_authenticated_profile(
+	response_writer http.ResponseWriter,
+	request *http.Request,
+) {
+	auth_claims, has_auth_claims := get_auth_claims_from_request(request)
+	if !has_auth_claims {
+		write_json_error(response_writer, http.StatusUnauthorized, "auth_claims_not_found")
+		return
+	}
+
+	write_json_response(response_writer, http.StatusOK, map[string]any{
+		"user_identifier": auth_claims.User_identifier,
+		"role_name":       auth_claims.Role_name,
+		"full_name":       auth_claims.Full_name,
+		"subject":         auth_claims.Subject,
+		"issuer":          auth_claims.Issuer,
+		"audience":        auth_claims.Audience,
+		"expires_at":      auth_claims.ExpiresAt,
+	})
+}
+
+func (api_handler *Api_handler) handle_issue_dev_access_token(
+	response_writer http.ResponseWriter,
+	request *http.Request,
+) {
+	if !api_handler.auth_enable_dev_token_issue {
+		write_json_error(response_writer, http.StatusNotFound, "resource_not_found")
+		return
+	}
+
+	var issue_access_token_payload struct {
+		User_identifier string `json:"user_identifier"`
+		Role_name       string `json:"role_name"`
+		Full_name       string `json:"full_name"`
+	}
+	decode_payload_error := json.NewDecoder(request.Body).Decode(&issue_access_token_payload)
+	if decode_payload_error != nil {
+		write_json_error(response_writer, http.StatusBadRequest, "invalid_issue_dev_access_token_payload")
+		return
+	}
+
+	generate_access_token_command := auth.Generate_access_token_command{
+		User_identifier: strings.TrimSpace(issue_access_token_payload.User_identifier),
+		Role_name:       strings.TrimSpace(issue_access_token_payload.Role_name),
+		Full_name:       strings.TrimSpace(issue_access_token_payload.Full_name),
+	}
+	access_token, expires_at, generate_access_token_error := api_handler.jwt_authenticator.Generate_access_token(
+		generate_access_token_command,
+	)
+	if generate_access_token_error != nil {
+		write_json_error(response_writer, http.StatusBadRequest, generate_access_token_error.Error())
+		return
+	}
+
+	write_json_response(response_writer, http.StatusCreated, map[string]any{
+		"access_token": access_token,
+		"token_type":   "Bearer",
+		"expires_at":   expires_at,
+		"role_name":    generate_access_token_command.Role_name,
+	})
 }
 
 func (api_handler *Api_handler) handle_list_bins(response_writer http.ResponseWriter, request *http.Request) {

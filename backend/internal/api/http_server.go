@@ -58,7 +58,7 @@ func (api_server *Api_server) Shutdown(shutdown_context context.Context) error {
 func with_cors_headers(next_handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(response_writer http.ResponseWriter, request *http.Request) {
 		response_writer.Header().Set("Access-Control-Allow-Origin", "*")
-		response_writer.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		response_writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		response_writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Cache-Control")
 		response_writer.Header().Set("Access-Control-Max-Age", "600")
 

@@ -250,6 +250,7 @@ try {
 		$env:NATS_URL = "nats://localhost:$nats_port_number"
 		$env:NATS_GPS_SUBJECT = 'gps.trucks.location'
 		$env:NATS_GPS_QUEUE_GROUP = 'ecochitas_gps_workers'
+		$env:NATS_ROUTE_DEVIATION_ALERTS_SUBJECT = 'operations.routes.deviation_alerts'
 		$env:HTTP_WRITE_TIMEOUT_SECONDS = '0'
 		$backend_process = Start-Process -FilePath 'go' -ArgumentList @('run', './cmd/api') -WorkingDirectory $backend_root_directory -WindowStyle Hidden -PassThru
 		$backend_process_id = $backend_process.Id

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ecochitas/internal/api"
+	"ecochitas/internal/auth"
 	"ecochitas/internal/config"
 	"ecochitas/internal/gps"
 	"ecochitas/internal/infrastructure/nats_client"
@@ -52,13 +53,39 @@ func New_backend_app() (*Backend_app, error) {
 
 	bin_repository := storage.New_bin_repository(postgres_pool)
 	truck_position_repository := storage.New_truck_position_repository(postgres_pool)
+	route_repository := storage.New_route_repository(postgres_pool)
 	recycling_zone_repository := storage.New_recycling_zone_repository(postgres_pool)
+	operations_repository := storage.New_operations_repository(postgres_pool)
 	truck_position_stream := realtime.New_truck_position_stream(application_logger)
+	operations_event_publisher := realtime.New_operations_event_publisher(
+		nats_connection,
+		application_config.Nats_bin_sensor_events_subject,
+		application_config.Nats_driver_collection_events_subject,
+		application_config.Nats_route_blockage_events_subject,
+		application_config.Nats_route_deviation_alerts_subject,
+	)
+	jwt_authenticator, create_jwt_authenticator_error := auth.New_jwt_authenticator(
+		application_config.Auth_jwt_signing_key,
+		application_config.Auth_jwt_issuer,
+		application_config.Auth_jwt_audience,
+		application_config.Auth_access_token_ttl_minutes,
+	)
+	if create_jwt_authenticator_error != nil {
+		nats_connection.Close()
+		postgres_pool.Close()
+		return nil, fmt.Errorf("failed_to_create_jwt_authenticator: %w", create_jwt_authenticator_error)
+	}
+
 	api_handler := api.New_api_handler(
 		bin_repository,
 		truck_position_repository,
+		route_repository,
 		recycling_zone_repository,
+		operations_repository,
 		truck_position_stream,
+		operations_event_publisher,
+		jwt_authenticator,
+		application_config.Auth_enable_dev_token_issue,
 		application_logger,
 	)
 	api_server_instance := api.New_api_server(application_config, api_handler, application_logger)

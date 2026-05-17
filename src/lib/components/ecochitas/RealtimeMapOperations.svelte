@@ -53,29 +53,35 @@
 	const cochabamba_center_latitude = -17.3935;
 	const cochabamba_center_longitude = -66.157;
 	const default_backend_api_url = 'http://127.0.0.1:8080';
-	const truck_positions_source_identifier = 'truck_positions_source';
-	const truck_positions_circle_layer_identifier = 'truck_positions_circle_layer';
+	const truck_paths_source_identifier = 'truck_paths_source';
+	const truck_paths_layer_identifier = 'truck_paths_layer';
 
-	const map_style_specification: import('maplibre-gl').StyleSpecification = {
-		version: 8,
-		sources: {
-			openstreetmap_tiles: {
-				type: 'raster',
-				tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-				tileSize: 256,
-				attribution: '&copy; OpenStreetMap contributors'
-			}
-		},
-		layers: [
-			{
-				id: 'openstreetmap_base_layer',
-				type: 'raster',
-				source: 'openstreetmap_tiles',
-				minzoom: 0,
-				maxzoom: 22
-			}
-		]
-	};
+	function get_map_style(is_dark: boolean): import('maplibre-gl').StyleSpecification {
+		const tile_url = is_dark
+			? 'https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png'
+			: 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
+
+		return {
+			version: 8,
+			sources: {
+				base_tiles: {
+					type: 'raster',
+					tiles: [tile_url],
+					tileSize: 256,
+					attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+				}
+			},
+			layers: [
+				{
+					id: 'base_layer',
+					type: 'raster',
+					source: 'base_tiles',
+					minzoom: 0,
+					maxzoom: 22
+				}
+			]
+		};
+	}
 
 	let backend_api_url = $state(default_backend_api_url);
 	let truck_identifier_filter = $state('');
@@ -96,10 +102,13 @@
 	let truck_popup_instance: import('maplibre-gl').Popup | null = null;
 	let has_registered_layer_interactions = false;
 	let latest_positions_by_truck_identifier = new SvelteMap<string, Truck_latest_position>();
+	let truck_paths_by_identifier = new Map<string, [number, number][]>();
+	let theme_observer: MutationObserver | null = null;
 
 	onMount(async () => {
 		await initialize_map();
 		setup_map_resize_observer();
+		setup_theme_observer();
 		await load_latest_positions_snapshot();
 		connect_truck_stream();
 	});
@@ -107,7 +116,37 @@
 	onDestroy(() => {
 		disconnect_truck_stream();
 		destroy_map();
+		theme_observer?.disconnect();
 	});
+
+	function setup_theme_observer() {
+		if (typeof window === 'undefined') return;
+		theme_observer = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				if (mutation.attributeName === 'data-theme') {
+					apply_map_theme(document.documentElement.dataset.theme === 'dark');
+				}
+			}
+		});
+		theme_observer.observe(document.documentElement, { attributes: true });
+	}
+
+	function apply_map_theme(is_dark: boolean) {
+		if (!map_instance) return;
+
+		if (!map_instance.isStyleLoaded()) {
+			map_instance.once('styledata', () => apply_map_theme(is_dark));
+			return;
+		}
+
+		map_instance.setStyle(get_map_style(is_dark));
+
+		map_instance.once('style.load', () => {
+			has_registered_layer_interactions = false;
+			ensure_truck_layers_ready();
+			sync_truck_source_data();
+		});
+	}
 
 	async function initialize_map() {
 		if (!map_container_element || map_instance) {
@@ -115,15 +154,15 @@
 		}
 
 		maplibre_library = await import('maplibre-gl');
+		const is_dark_initially = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'dark';
 
 		map_instance = new maplibre_library.Map({
 			container: map_container_element,
-			style: map_style_specification,
+			style: get_map_style(is_dark_initially),
 			center: [cochabamba_center_longitude, cochabamba_center_latitude],
-			zoom: 13
+			zoom: 13,
+			attributionControl: false
 		});
-
-		map_instance.addControl(new maplibre_library.NavigationControl(), 'top-left');
 
 		map_instance.on('load', () => {
 			ensure_truck_layers_ready();
@@ -610,16 +649,6 @@
 		cursor: not-allowed;
 	}
 
-	.map_page_grid {
-		display: grid;
-		grid-template-columns: 1fr;
-		grid-template-areas:
-			'controls'
-			'map'
-			'list';
-		gap: 0.85rem;
-	}
-
 	.panel {
 		background: var(--ecochitas-surface);
 		backdrop-filter: blur(14px);
@@ -631,16 +660,39 @@
 	}
 
 	.controls_panel {
-		grid-area: controls;
+		position: fixed;
+		top: 5rem;
+		left: 1rem;
+		width: calc(100% - 2rem);
+		max-width: 360px;
+		z-index: 10;
+		max-height: calc(50vh - 6rem);
+		overflow-y: auto;
 	}
 
 	.map_panel {
-		grid-area: map;
-		padding: 0.85rem;
+		position: fixed;
+		top: 0;
+		left: 0;
+		width: 100vw;
+		height: 100vh;
+		z-index: 0;
+		padding: 0;
+		background: transparent;
+		border: none;
+		border-radius: 0;
+		box-shadow: none;
 	}
 
 	.list_panel {
-		grid-area: list;
+		position: fixed;
+		bottom: 5rem;
+		left: 1rem;
+		width: calc(100% - 2rem);
+		max-width: 360px;
+		z-index: 10;
+		max-height: calc(50vh - 6rem);
+		overflow-y: auto;
 	}
 
 	.panel_title_row {

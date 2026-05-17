@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import type { Pathname } from '$app/types';
 	import { page } from '$app/state';
+	import ecochitas_favicon_asset from '$lib/assets/favicon.svg';
 	import EcochitasIcon, {
 		type EcochitasIconName
 	} from '$lib/components/ecochitas/EcochitasIcon.svelte';
@@ -75,7 +76,7 @@
 		<header class="top_header">
 			<div class="brand_group">
 				<div class="brand_icon" aria-hidden="true">
-					<EcochitasIcon name="brand" size={25} />
+					<img src={ecochitas_favicon_asset} alt="" class="brand_logo_image" />
 				</div>
 				<div>
 					<p class="eyebrow_text">EcoChitas · Cochabamba</p>
@@ -278,8 +279,14 @@
 		display: grid;
 		place-items: center;
 		border-radius: 0.8rem;
-		background: linear-gradient(135deg, var(--ecochitas-leaf), #22c55e);
-		color: #000;
+		background: transparent;
+	}
+
+	.brand_logo_image {
+		width: 1.55rem;
+		height: 1.55rem;
+		display: block;
+		object-fit: contain;
 	}
 
 	.eyebrow_text {

@@ -19,6 +19,7 @@ Backend del PoC para:
 - `NATS_DRIVER_COLLECTION_EVENTS_SUBJECT` (default: `operations.driver.collection_events`)
 - `NATS_ROUTE_BLOCKAGE_EVENTS_SUBJECT` (default: `operations.routes.blockage_events`)
 - `NATS_ROUTE_DEVIATION_ALERTS_SUBJECT` (default: `operations.routes.deviation_alerts`)
+- `OSRM_BASE_URL` (default: `https://router.project-osrm.org`)
 - `AUTH_JWT_SIGNING_KEY` (default: `dev_only_change_me`)
 - `AUTH_JWT_ISSUER` (default: `ecochitas_backend`)
 - `AUTH_JWT_AUDIENCE` (default: `ecochitas_api`)

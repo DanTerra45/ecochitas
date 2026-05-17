@@ -2,10 +2,14 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,25 +32,35 @@ const (
 	route_revision_change_type_created       = "route_created"
 	route_revision_change_type_updated       = "route_updated"
 	route_revision_change_type_stops_synced  = "route_stops_synced"
+	routing_status_not_required              = "not_required"
+	routing_status_routed                    = "routed"
+	routing_status_fallback_straight_line    = "fallback_straight_line"
+	routing_provider_osrm                    = "osrm"
 )
 
 type Route_repository struct {
-	postgres_pool *pgxpool.Pool
+	postgres_pool     *pgxpool.Pool
+	route_path_router *osrm_route_service
 }
 
 type collection_route_row struct {
-	Route_identifier   string
-	Route_code         string
-	Route_name         string
-	Zone_name          string
-	Collection_weekday int
-	Is_active          bool
-	Stop_total         int
+	Route_identifier          string
+	Route_code                string
+	Route_name                string
+	Zone_name                 string
+	Collection_weekday        int
+	Is_active                 bool
+	Stop_total                int
+	Raw_road_path_coordinates []byte
+	Routing_status            string
+	Routing_provider          string
+	Routed_at                 *time.Time
 }
 
-func New_route_repository(postgres_pool *pgxpool.Pool) *Route_repository {
+func New_route_repository(postgres_pool *pgxpool.Pool, osrm_base_url string) *Route_repository {
 	return &Route_repository{
-		postgres_pool: postgres_pool,
+		postgres_pool:     postgres_pool,
+		route_path_router: new_osrm_route_service(osrm_base_url),
 	}
 }
 
@@ -66,7 +80,11 @@ func (route_repository *Route_repository) List_collection_routes(
 			route.zone_name,
 			route.collection_weekday::int,
 			route.is_active,
-			COALESCE(stop_total_subquery.stop_total, 0)::int
+			COALESCE(stop_total_subquery.stop_total, 0)::int,
+			COALESCE(route.road_path_coordinates, '[]'::jsonb),
+			COALESCE(route.routing_status, ''),
+			COALESCE(route.routing_provider, ''),
+			route.routed_at
 		FROM collection_routes AS route
 		LEFT JOIN LATERAL (
 			SELECT COUNT(*)::int AS stop_total
@@ -104,6 +122,10 @@ func (route_repository *Route_repository) List_collection_routes(
 			&route_row.Collection_weekday,
 			&route_row.Is_active,
 			&route_row.Stop_total,
+			&route_row.Raw_road_path_coordinates,
+			&route_row.Routing_status,
+			&route_row.Routing_provider,
+			&route_row.Routed_at,
 		)
 		if scan_row_error != nil {
 			return nil, fmt.Errorf("failed_to_scan_collection_route_row: %w", scan_row_error)
@@ -118,7 +140,13 @@ func (route_repository *Route_repository) List_collection_routes(
 			return nil, load_route_stops_error
 		}
 
-		collection_route_view_item := map_collection_route_row_to_view(route_row, route_stop_view_list)
+		collection_route_view_item, map_collection_route_error := map_collection_route_row_to_view(
+			route_row,
+			route_stop_view_list,
+		)
+		if map_collection_route_error != nil {
+			return nil, map_collection_route_error
+		}
 		collection_route_view_list = append(collection_route_view_list, collection_route_view_item)
 	}
 
@@ -215,6 +243,16 @@ func (route_repository *Route_repository) Create_collection_route(
 	)
 	if insert_revision_error != nil {
 		return nil, insert_revision_error
+	}
+
+	refresh_route_road_path_error := route_repository.refresh_route_road_path_coordinates(
+		application_context,
+		transaction_handler,
+		created_route_identifier,
+		nil,
+	)
+	if refresh_route_road_path_error != nil {
+		return nil, refresh_route_road_path_error
 	}
 
 	commit_transaction_error := transaction_handler.Commit(application_context)
@@ -397,6 +435,16 @@ func (route_repository *Route_repository) Update_collection_route(
 		return nil, insert_revision_error
 	}
 
+	refresh_route_road_path_error := route_repository.refresh_route_road_path_coordinates(
+		application_context,
+		transaction_handler,
+		normalized_route_identifier,
+		nil,
+	)
+	if refresh_route_road_path_error != nil {
+		return nil, refresh_route_road_path_error
+	}
+
 	commit_transaction_error := transaction_handler.Commit(application_context)
 	if commit_transaction_error != nil {
 		return nil, fmt.Errorf("failed_to_commit_update_collection_route_transaction: %w", commit_transaction_error)
@@ -570,6 +618,16 @@ func (route_repository *Route_repository) Sync_route_stops(
 	)
 	if insert_revision_error != nil {
 		return nil, insert_revision_error
+	}
+
+	refresh_route_road_path_error := route_repository.refresh_route_road_path_coordinates(
+		application_context,
+		transaction_handler,
+		normalized_route_identifier,
+		route_stop_view_list,
+	)
+	if refresh_route_road_path_error != nil {
+		return nil, refresh_route_road_path_error
 	}
 
 	commit_transaction_error := transaction_handler.Commit(application_context)
@@ -1356,7 +1414,11 @@ func load_collection_route_view_by_identifier(
 			route.zone_name,
 			route.collection_weekday::int,
 			route.is_active,
-			COALESCE(stop_total_subquery.stop_total, 0)::int
+			COALESCE(stop_total_subquery.stop_total, 0)::int,
+			COALESCE(route.road_path_coordinates, '[]'::jsonb),
+			COALESCE(route.routing_status, ''),
+			COALESCE(route.routing_provider, ''),
+			route.routed_at
 		FROM collection_routes AS route
 		LEFT JOIN LATERAL (
 			SELECT COUNT(*)::int AS stop_total
@@ -1379,6 +1441,10 @@ func load_collection_route_view_by_identifier(
 		&route_row.Collection_weekday,
 		&route_row.Is_active,
 		&route_row.Stop_total,
+		&route_row.Raw_road_path_coordinates,
+		&route_row.Routing_status,
+		&route_row.Routing_provider,
+		&route_row.Routed_at,
 	)
 	if load_collection_route_error != nil {
 		if errors.Is(load_collection_route_error, pgx.ErrNoRows) {
@@ -1396,7 +1462,13 @@ func load_collection_route_view_by_identifier(
 		return nil, load_route_stops_error
 	}
 
-	collection_route_view := map_collection_route_row_to_view(route_row, route_stop_view_list)
+	collection_route_view, map_collection_route_error := map_collection_route_row_to_view(
+		route_row,
+		route_stop_view_list,
+	)
+	if map_collection_route_error != nil {
+		return nil, map_collection_route_error
+	}
 	return &collection_route_view, nil
 }
 
@@ -1584,16 +1656,37 @@ func normalize_route_stop_planned_time(raw_planned_time string) (string, error) 
 func map_collection_route_row_to_view(
 	route_row collection_route_row,
 	route_stop_view_list []domain.Route_stop_view,
-) domain.Collection_route_view {
+) (domain.Collection_route_view, error) {
+	road_path_coordinate_list := make([]domain.Route_road_path_coordinate, 0)
+	if len(route_row.Raw_road_path_coordinates) > 0 {
+		unmarshal_road_path_error := json.Unmarshal(
+			route_row.Raw_road_path_coordinates,
+			&road_path_coordinate_list,
+		)
+		if unmarshal_road_path_error != nil {
+			return domain.Collection_route_view{}, fmt.Errorf(
+				"failed_to_unmarshal_route_road_path_coordinates: %w",
+				unmarshal_road_path_error,
+			)
+		}
+	}
+
 	collection_route_view := domain.Collection_route_view{
-		Route_identifier:   route_row.Route_identifier,
-		Route_code:         route_row.Route_code,
-		Route_name:         route_row.Route_name,
-		Zone_name:          route_row.Zone_name,
-		Collection_weekday: route_row.Collection_weekday,
-		Is_active:          route_row.Is_active,
-		Stop_total:         route_row.Stop_total,
-		Path_coordinates:   make([]domain.Route_path_coordinate, 0, len(route_stop_view_list)),
+		Route_identifier:      route_row.Route_identifier,
+		Route_code:            route_row.Route_code,
+		Route_name:            route_row.Route_name,
+		Zone_name:             route_row.Zone_name,
+		Collection_weekday:    route_row.Collection_weekday,
+		Is_active:             route_row.Is_active,
+		Stop_total:            route_row.Stop_total,
+		Path_coordinates:      make([]domain.Route_path_coordinate, 0, len(route_stop_view_list)),
+		Road_path_coordinates: road_path_coordinate_list,
+		Routing_status:        strings.TrimSpace(route_row.Routing_status),
+		Routing_provider:      strings.TrimSpace(route_row.Routing_provider),
+	}
+	if route_row.Routed_at != nil {
+		routed_at_utc := route_row.Routed_at.UTC()
+		collection_route_view.Routed_at = &routed_at_utc
 	}
 
 	for _, route_stop_view_item := range route_stop_view_list {
@@ -1609,7 +1702,200 @@ func map_collection_route_row_to_view(
 		)
 	}
 
-	return collection_route_view
+	return collection_route_view, nil
+}
+
+func (route_repository *Route_repository) refresh_route_road_path_coordinates(
+	application_context context.Context,
+	query_executor postgres_query_executor,
+	route_identifier string,
+	route_stop_view_list []domain.Route_stop_view,
+) error {
+	ordered_route_stop_view_list := route_stop_view_list
+	if ordered_route_stop_view_list == nil {
+		loaded_route_stop_view_list, load_route_stops_error := load_route_stop_view_list_by_route_identifier(
+			application_context,
+			query_executor,
+			route_identifier,
+		)
+		if load_route_stops_error != nil {
+			return load_route_stops_error
+		}
+		ordered_route_stop_view_list = loaded_route_stop_view_list
+	}
+
+	ordered_path_coordinate_list := build_ordered_path_coordinates_from_route_stops(ordered_route_stop_view_list)
+	computed_stops_hash := build_route_stops_hash(ordered_path_coordinate_list)
+
+	load_existing_routing_state_statement := `
+		SELECT
+			COALESCE(stops_hash, ''),
+			COALESCE(road_path_coordinates, '[]'::jsonb)
+		FROM collection_routes
+		WHERE id = $1::uuid
+		FOR UPDATE;
+	`
+	var existing_stops_hash string
+	var existing_raw_road_path_coordinates []byte
+	load_existing_routing_state_error := query_executor.QueryRow(
+		application_context,
+		load_existing_routing_state_statement,
+		route_identifier,
+	).Scan(
+		&existing_stops_hash,
+		&existing_raw_road_path_coordinates,
+	)
+	if load_existing_routing_state_error != nil {
+		return fmt.Errorf("failed_to_load_existing_route_routing_state: %w", load_existing_routing_state_error)
+	}
+
+	existing_has_road_path_coordinates := has_non_empty_road_path_coordinates(existing_raw_road_path_coordinates)
+	if existing_stops_hash == computed_stops_hash && (existing_has_road_path_coordinates || len(ordered_path_coordinate_list) < 2) {
+		return nil
+	}
+
+	resolved_road_path_coordinate_list := make([]domain.Route_road_path_coordinate, 0)
+	routing_status := routing_status_not_required
+	routing_error_text := ""
+	if len(ordered_path_coordinate_list) >= 2 {
+		if route_repository.route_path_router == nil {
+			resolved_road_path_coordinate_list = build_straight_line_road_path_coordinates(
+				ordered_path_coordinate_list,
+			)
+			routing_status = routing_status_fallback_straight_line
+			routing_error_text = "route_path_router_not_configured"
+		} else {
+			calculated_road_path_coordinate_list, calculate_road_path_error := route_repository.route_path_router.calculate_road_path_coordinates(
+				application_context,
+				ordered_path_coordinate_list,
+			)
+			if calculate_road_path_error != nil {
+				resolved_road_path_coordinate_list = build_straight_line_road_path_coordinates(
+					ordered_path_coordinate_list,
+				)
+				routing_status = routing_status_fallback_straight_line
+				routing_error_text = calculate_road_path_error.Error()
+			} else {
+				resolved_road_path_coordinate_list = calculated_road_path_coordinate_list
+				routing_status = routing_status_routed
+			}
+		}
+	}
+
+	serialized_road_path_coordinate_list, marshal_road_path_error := json.Marshal(resolved_road_path_coordinate_list)
+	if marshal_road_path_error != nil {
+		return fmt.Errorf("failed_to_marshal_route_road_path_coordinates: %w", marshal_road_path_error)
+	}
+
+	update_route_routing_statement := `
+		UPDATE collection_routes
+		SET
+			stops_hash = $2,
+			road_path_coordinates = $3::jsonb,
+			routed_at = NOW(),
+			routing_provider = $4,
+			routing_status = $5,
+			routing_error = NULLIF($6, ''),
+			updated_at = NOW()
+		WHERE id = $1::uuid;
+	`
+	_, update_route_routing_error := query_executor.Exec(
+		application_context,
+		update_route_routing_statement,
+		route_identifier,
+		computed_stops_hash,
+		serialized_road_path_coordinate_list,
+		routing_provider_osrm,
+		routing_status,
+		strings.TrimSpace(routing_error_text),
+	)
+	if update_route_routing_error != nil {
+		return fmt.Errorf("failed_to_update_route_routing_state: %w", update_route_routing_error)
+	}
+
+	return nil
+}
+
+func build_ordered_path_coordinates_from_route_stops(
+	route_stop_view_list []domain.Route_stop_view,
+) []domain.Route_path_coordinate {
+	ordered_route_stop_view_list := append([]domain.Route_stop_view(nil), route_stop_view_list...)
+	sort.SliceStable(
+		ordered_route_stop_view_list,
+		func(left_index int, right_index int) bool {
+			return ordered_route_stop_view_list[left_index].Stop_order < ordered_route_stop_view_list[right_index].Stop_order
+		},
+	)
+
+	ordered_path_coordinate_list := make(
+		[]domain.Route_path_coordinate,
+		0,
+		len(ordered_route_stop_view_list),
+	)
+	for _, route_stop_view_item := range ordered_route_stop_view_list {
+		ordered_path_coordinate_list = append(
+			ordered_path_coordinate_list,
+			domain.Route_path_coordinate{
+				Stop_order:     route_stop_view_item.Stop_order,
+				Bin_identifier: route_stop_view_item.Bin_identifier,
+				Bin_code:       route_stop_view_item.Bin_code,
+				Latitude:       route_stop_view_item.Latitude,
+				Longitude:      route_stop_view_item.Longitude,
+			},
+		)
+	}
+
+	return ordered_path_coordinate_list
+}
+
+func build_route_stops_hash(ordered_path_coordinate_list []domain.Route_path_coordinate) string {
+	hash_material_builder := strings.Builder{}
+	for _, path_coordinate := range ordered_path_coordinate_list {
+		hash_material_builder.WriteString(strconv.Itoa(path_coordinate.Stop_order))
+		hash_material_builder.WriteString("|")
+		hash_material_builder.WriteString(strconv.FormatFloat(path_coordinate.Latitude, 'f', 7, 64))
+		hash_material_builder.WriteString(",")
+		hash_material_builder.WriteString(strconv.FormatFloat(path_coordinate.Longitude, 'f', 7, 64))
+		hash_material_builder.WriteString(";")
+	}
+
+	hashed_material := sha256.Sum256([]byte(hash_material_builder.String()))
+	return hex.EncodeToString(hashed_material[:])
+}
+
+func build_straight_line_road_path_coordinates(
+	ordered_path_coordinate_list []domain.Route_path_coordinate,
+) []domain.Route_road_path_coordinate {
+	straight_line_coordinate_list := make(
+		[]domain.Route_road_path_coordinate,
+		0,
+		len(ordered_path_coordinate_list),
+	)
+	for _, path_coordinate := range ordered_path_coordinate_list {
+		straight_line_coordinate_list = append(
+			straight_line_coordinate_list,
+			domain.Route_road_path_coordinate{
+				path_coordinate.Longitude,
+				path_coordinate.Latitude,
+			},
+		)
+	}
+
+	return straight_line_coordinate_list
+}
+
+func has_non_empty_road_path_coordinates(raw_road_path_coordinates []byte) bool {
+	if len(raw_road_path_coordinates) == 0 {
+		return false
+	}
+
+	road_path_coordinate_list := make([]domain.Route_road_path_coordinate, 0)
+	unmarshal_road_path_error := json.Unmarshal(raw_road_path_coordinates, &road_path_coordinate_list)
+	if unmarshal_road_path_error != nil {
+		return false
+	}
+
+	return len(road_path_coordinate_list) > 0
 }
 
 func load_truck_route_assignment_by_identifier(

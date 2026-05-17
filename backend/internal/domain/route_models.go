@@ -48,15 +48,21 @@ type Route_path_coordinate struct {
 	Longitude      float64 `json:"longitude"`
 }
 
+type Route_road_path_coordinate [2]float64
+
 type Collection_route_view struct {
-	Route_identifier   string                  `json:"route_identifier"`
-	Route_code         string                  `json:"route_code"`
-	Route_name         string                  `json:"route_name"`
-	Zone_name          string                  `json:"zone_name"`
-	Collection_weekday int                     `json:"collection_weekday"`
-	Is_active          bool                    `json:"is_active"`
-	Stop_total         int                     `json:"stop_total"`
-	Path_coordinates   []Route_path_coordinate `json:"path_coordinates"`
+	Route_identifier      string                       `json:"route_identifier"`
+	Route_code            string                       `json:"route_code"`
+	Route_name            string                       `json:"route_name"`
+	Zone_name             string                       `json:"zone_name"`
+	Collection_weekday    int                          `json:"collection_weekday"`
+	Is_active             bool                         `json:"is_active"`
+	Stop_total            int                          `json:"stop_total"`
+	Path_coordinates      []Route_path_coordinate      `json:"path_coordinates"`
+	Road_path_coordinates []Route_road_path_coordinate `json:"road_path_coordinates"`
+	Routing_status        string                       `json:"routing_status"`
+	Routing_provider      string                       `json:"routing_provider"`
+	Routed_at             *time.Time                   `json:"routed_at,omitempty"`
 }
 
 type Route_stop_view struct {

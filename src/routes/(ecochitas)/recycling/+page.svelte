@@ -161,6 +161,108 @@
 	const sorted_by_price = $derived(
 		[...recycling_categories].sort((a, b) => b.price_numeric - a.price_numeric)
 	);
+
+	// ── Reporting form state ──
+	type ViolationType = {
+		id: string;
+		label: string;
+		icon_path: string;
+	};
+
+	const violation_types: ViolationType[] = [
+		{
+			id: 'contaminacion',
+			label: 'Contaminación en bolsa',
+			icon_path:
+				'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01'
+		},
+		{
+			id: 'mezcla',
+			label: 'Mezcla con orgánicos',
+			icon_path: 'M3 3h18v18H3zM12 8v8M8 12h8'
+		},
+		{
+			id: 'material_sucio',
+			label: 'Material sucio / húmedo',
+			icon_path:
+				'M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z'
+		},
+		{
+			id: 'fuera_horario',
+			label: 'Depósito fuera de horario',
+			icon_path: 'M12 22c5.5 0 10-4.5 10-10S17.5 2 12 2 2 6.5 2 12s4.5 10 10 10zM12 6v6l4 2'
+		},
+		{
+			id: 'ewaste',
+			label: 'E-waste en recolector común',
+			icon_path:
+				'M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18'
+		},
+		{ id: 'otro', label: 'Otro', icon_path: 'M12 22c5.5 0 10-4.5 10-10S17.5 2 12 2 2 6.5 2 12s4.5 10 10 10zM9 9h.01M15 9h.01M8 13s1.5 2 4 2 4-2 4-2' }
+	];
+
+	let selected_violation = $state('');
+	let location_detected = $state(false);
+	let report_sent = $state(false);
+
+	function detect_location() {
+		location_detected = true;
+	}
+
+	function send_report() {
+		if (!selected_violation) return;
+		report_sent = true;
+		setTimeout(() => {
+			report_sent = false;
+			selected_violation = '';
+			location_detected = false;
+		}, 3000);
+	}
+
+	// ── Contaminadores data ──
+	type Contaminador = {
+		id: number;
+		location: string;
+		status: string;
+		status_type: 'pending' | 'warning' | 'investigating';
+		reports: number;
+		last_report: string;
+	};
+
+	const contaminadores: Contaminador[] = [
+		{
+			id: 1,
+			location: 'Av. América & Pando',
+			status: 'Multa Municipal Pendiente',
+			status_type: 'pending',
+			reports: 7,
+			last_report: '14 May 2026'
+		},
+		{
+			id: 2,
+			location: 'Plaza Colón',
+			status: 'Aviso Emitido',
+			status_type: 'warning',
+			reports: 5,
+			last_report: '12 May 2026'
+		},
+		{
+			id: 3,
+			location: 'Av. Heroínas',
+			status: 'En Investigación',
+			status_type: 'investigating',
+			reports: 4,
+			last_report: '10 May 2026'
+		},
+		{
+			id: 4,
+			location: 'Parque Tunari',
+			status: 'Multa Municipal Pendiente',
+			status_type: 'pending',
+			reports: 3,
+			last_report: '09 May 2026'
+		}
+	];
 </script>
 
 <!-- ── Hero ── -->
@@ -353,6 +455,242 @@
 				<li>Llevar e-waste al recolector común; usa solo los puntos GAMC.</li>
 			</ul>
 		</div>
+	</div>
+</section>
+
+<!-- ── Reportar Práctica Incorrecta ── -->
+<section class="panel">
+	<div class="section_head_row">
+		<svg
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="#ef4444"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			stroke-width="1.9"
+			style="width:18px;height:18px;flex-shrink:0"
+			aria-hidden="true"
+		>
+			<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+			<line x1="12" y1="9" x2="12" y2="13" />
+			<line x1="12" y1="17" x2="12.01" y2="17" />
+		</svg>
+		<h2 class="section_title">Reportar Práctica Incorrecta</h2>
+	</div>
+	<p class="section_sub">Denuncia anónimamente malas prácticas de reciclaje en tu zona.</p>
+
+	<!-- GPS Button -->
+	<button
+		class="gps_btn"
+		class:gps_btn_active={location_detected}
+		onclick={detect_location}
+		aria-pressed={location_detected}
+	>
+		{#if location_detected}
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				stroke-width="2.2"
+				style="width:16px;height:16px;flex-shrink:0"
+				aria-hidden="true"
+			>
+				<polyline points="20 6 9 17 4 12" />
+			</svg>
+			Ubicación Detectada
+		{:else}
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				stroke-width="1.9"
+				style="width:16px;height:16px;flex-shrink:0"
+				aria-hidden="true"
+			>
+				<path d="M12 21s-8-7.5-8-12a8 8 0 0 1 16 0c0 4.5-8 12-8 12z" />
+				<circle cx="12" cy="9" r="2.5" />
+			</svg>
+			Detectar Mi Ubicación (GPS)
+		{/if}
+	</button>
+
+	<!-- Violation type picker -->
+	<p class="field_label">Tipo de Infracción <span class="field_required">*</span></p>
+	<div class="violation_grid">
+		{#each violation_types as vtype (vtype.id)}
+			<button
+				class="vtype_btn"
+				class:vtype_btn_active={selected_violation === vtype.id}
+				onclick={() => (selected_violation = vtype.id)}
+				aria-pressed={selected_violation === vtype.id}
+			>
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					stroke-width="1.75"
+					style="width:14px;height:14px;flex-shrink:0"
+					aria-hidden="true"
+				>
+					<path d={vtype.icon_path} />
+				</svg>
+				{vtype.label}
+			</button>
+		{/each}
+	</div>
+
+	<!-- Submit button -->
+	<button
+		class="submit_btn"
+		class:submit_btn_sent={report_sent}
+		disabled={!selected_violation || report_sent}
+		onclick={send_report}
+	>
+		{#if report_sent}
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				stroke-width="2.2"
+				style="width:16px;height:16px;flex-shrink:0"
+				aria-hidden="true"
+			>
+				<polyline points="20 6 9 17 4 12" />
+			</svg>
+			Reporte Enviado
+		{:else}
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				stroke-width="1.9"
+				style="width:16px;height:16px;flex-shrink:0"
+				aria-hidden="true"
+			>
+				<line x1="22" y1="2" x2="11" y2="13" />
+				<polygon points="22 2 15 22 11 13 2 9 22 2" fill="currentColor" stroke="none" />
+			</svg>
+			Enviar Reporte Anónimo
+		{/if}
+	</button>
+
+	<!-- Privacy notice -->
+	<div class="privacy_notice">
+		<svg
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			stroke-width="1.9"
+			style="width:13px;height:13px;flex-shrink:0;margin-top:1px"
+			aria-hidden="true"
+		>
+			<rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+			<path d="M7 11V7a5 5 0 0 1 10 0v4" />
+		</svg>
+		<span>
+			<strong>Tu privacidad está protegida:</strong> Los reportes son completamente anónimos. La
+			información se usa solo para mejorar el programa de reciclaje.
+		</span>
+	</div>
+</section>
+
+<!-- ── Contaminadores de la Semana ── -->
+<section class="panel contam_panel">
+	<div class="section_head_row">
+		<svg
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="#ef4444"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			stroke-width="1.9"
+			style="width:18px;height:18px;flex-shrink:0"
+			aria-hidden="true"
+		>
+			<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+			<circle cx="9" cy="7" r="4" />
+			<line x1="17" y1="8" x2="23" y2="14" />
+			<line x1="23" y1="8" x2="17" y2="14" />
+		</svg>
+		<h2 class="section_title contam_title">Contaminadores de la Semana</h2>
+	</div>
+	<p class="section_sub">Infractores recurrentes reportados 3+ veces en el mismo sector.</p>
+
+	<div class="contam_list">
+		{#each contaminadores as c (c.id)}
+			<div class="contam_card">
+				<!-- Avatar -->
+				<div class="contam_avatar">
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="1.75"
+						style="width:20px;height:20px"
+						aria-hidden="true"
+					>
+						<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+						<circle cx="9" cy="7" r="4" />
+						<line x1="17" y1="8" x2="23" y2="14" />
+						<line x1="23" y1="8" x2="17" y2="14" />
+					</svg>
+				</div>
+
+				<!-- Info -->
+				<div class="contam_info">
+					<div class="contam_name_row">
+						<strong class="contam_name">Infractor #{c.id}</strong>
+						<span class="contam_badge">{c.reports} Reportes</span>
+					</div>
+					<div class="contam_location">
+						<svg
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="1.9"
+							style="width:11px;height:11px;flex-shrink:0"
+							aria-hidden="true"
+						>
+							<path d="M12 21s-8-7.5-8-12a8 8 0 0 1 16 0c0 4.5-8 12-8 12z" />
+							<circle cx="12" cy="9" r="2" />
+						</svg>
+						{c.location}
+					</div>
+					<div class="contam_meta_row">
+						<span class="contam_status contam_status_{c.status_type}">
+							{#if c.status_type === 'pending'}
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" style="width:10px;height:10px;flex-shrink:0" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 6v6l3 3"/></svg>
+							{:else if c.status_type === 'warning'}
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" style="width:10px;height:10px;flex-shrink:0" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+							{:else}
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" style="width:10px;height:10px;flex-shrink:0" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+							{/if}
+							{c.status}
+						</span>
+						<span class="contam_date">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" style="width:10px;height:10px;flex-shrink:0" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+							{c.last_report}
+						</span>
+					</div>
+				</div>
+			</div>
+		{/each}
 	</div>
 </section>
 
@@ -905,6 +1243,352 @@
 		font-size: 0.82rem;
 		color: var(--ecochitas-ink);
 		line-height: 1.5;
+	}
+
+	/* ── GPS Button ── */
+	.gps_btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.55rem;
+		width: 100%;
+		padding: 0.85rem 1rem;
+		margin-top: 1.1rem;
+		border-radius: 1rem;
+		border: none;
+		background: var(--ecochitas-sky, #3b82f6);
+		color: white;
+		font-size: 0.88rem;
+		font-weight: 800;
+		font-family: 'Sora', 'Plus Jakarta Sans', sans-serif;
+		cursor: pointer;
+		transition:
+			background 0.15s,
+			transform 0.12s,
+			box-shadow 0.15s;
+		box-shadow: 0 4px 16px color-mix(in srgb, var(--ecochitas-sky, #3b82f6) 35%, transparent);
+	}
+
+	.gps_btn:hover {
+		background: color-mix(in srgb, var(--ecochitas-sky, #3b82f6) 85%, #000);
+		transform: translateY(-1px);
+		box-shadow: 0 6px 20px color-mix(in srgb, var(--ecochitas-sky, #3b82f6) 40%, transparent);
+	}
+
+	.gps_btn_active {
+		background: #16a34a;
+		box-shadow: 0 4px 16px color-mix(in srgb, #16a34a 35%, transparent);
+	}
+
+	.gps_btn_active:hover {
+		background: #15803d;
+		box-shadow: 0 6px 20px color-mix(in srgb, #16a34a 40%, transparent);
+	}
+
+	/* ── Violation type picker ── */
+	.field_label {
+		font-size: 0.82rem;
+		font-weight: 700;
+		color: var(--ecochitas-ink);
+		margin: 1.1rem 0 0.55rem;
+		font-family: 'Sora', 'Plus Jakarta Sans', sans-serif;
+	}
+
+	.field_required {
+		color: #ef4444;
+	}
+
+	.violation_grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.45rem;
+	}
+
+	.vtype_btn {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0.65rem 0.8rem;
+		border-radius: 0.85rem;
+		border: 1.5px solid var(--ecochitas-border);
+		background: var(--ecochitas-surface);
+		color: var(--ecochitas-ink);
+		font-size: 0.76rem;
+		font-weight: 600;
+		cursor: pointer;
+		text-align: left;
+		transition:
+			border-color 0.15s,
+			background 0.15s,
+			color 0.12s,
+			transform 0.1s;
+		line-height: 1.3;
+	}
+
+	.vtype_btn:hover {
+		border-color: #fca5a5;
+		background: #fff1f2;
+		color: #b91c1c;
+		transform: translateY(-1px);
+	}
+
+	:root[data-theme='dark'] .vtype_btn:hover {
+		background: rgba(239, 68, 68, 0.12);
+		border-color: rgba(239, 68, 68, 0.4);
+		color: #fca5a5;
+	}
+
+	.vtype_btn_active {
+		border-color: #ef4444;
+		background: #fee2e2;
+		color: #b91c1c;
+	}
+
+	:root[data-theme='dark'] .vtype_btn_active {
+		border-color: #ef4444;
+		background: rgba(239, 68, 68, 0.15);
+		color: #fca5a5;
+	}
+
+	/* ── Submit button ── */
+	.submit_btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.55rem;
+		width: 100%;
+		padding: 0.9rem 1rem;
+		margin-top: 0.85rem;
+		border-radius: 1rem;
+		border: none;
+		background: #ef4444;
+		color: white;
+		font-size: 0.88rem;
+		font-weight: 800;
+		font-family: 'Sora', 'Plus Jakarta Sans', sans-serif;
+		cursor: pointer;
+		transition:
+			background 0.15s,
+			transform 0.12s,
+			box-shadow 0.15s,
+			opacity 0.15s;
+		box-shadow: 0 4px 16px rgba(239, 68, 68, 0.35);
+	}
+
+	.submit_btn:hover:not(:disabled) {
+		background: #dc2626;
+		transform: translateY(-1px);
+		box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
+	}
+
+	.submit_btn:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+		transform: none;
+		box-shadow: none;
+	}
+
+	.submit_btn_sent {
+		background: #16a34a !important;
+		box-shadow: 0 4px 16px rgba(22, 163, 74, 0.35) !important;
+		opacity: 1 !important;
+		cursor: default !important;
+	}
+
+	/* ── Privacy notice ── */
+	.privacy_notice {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.55rem;
+		padding: 0.75rem 0.9rem;
+		margin-top: 0.75rem;
+		border-radius: 0.85rem;
+		background: #eff6ff;
+		border: 1px solid #bfdbfe;
+		font-size: 0.76rem;
+		color: #1d4ed8;
+		line-height: 1.5;
+	}
+
+	:root[data-theme='dark'] .privacy_notice {
+		background: rgba(59, 130, 246, 0.1);
+		border-color: rgba(59, 130, 246, 0.25);
+		color: #93c5fd;
+	}
+
+	.privacy_notice strong {
+		color: #1e40af;
+	}
+
+	:root[data-theme='dark'] .privacy_notice strong {
+		color: #60a5fa;
+	}
+
+	/* ── Contaminadores ── */
+	.contam_panel {
+		border-color: #fecaca;
+		background: color-mix(in srgb, #fff5f5 80%, var(--ecochitas-surface));
+	}
+
+	:root[data-theme='dark'] .contam_panel {
+		border-color: rgba(239, 68, 68, 0.25);
+		background: rgba(239, 68, 68, 0.04);
+	}
+
+	.contam_title {
+		color: #b91c1c;
+	}
+
+	:root[data-theme='dark'] .contam_title {
+		color: #fca5a5;
+	}
+
+	.contam_list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+		margin-top: 1rem;
+	}
+
+	.contam_card {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.9rem 1rem;
+		background: white;
+		border: 1.5px solid #fecaca;
+		border-radius: 1.1rem;
+		transition: box-shadow 0.15s;
+	}
+
+	:root[data-theme='dark'] .contam_card {
+		background: rgba(255, 255, 255, 0.04);
+		border-color: rgba(239, 68, 68, 0.2);
+	}
+
+	.contam_card:hover {
+		box-shadow: 0 4px 16px rgba(239, 68, 68, 0.12);
+	}
+
+	.contam_avatar {
+		flex-shrink: 0;
+		width: 44px;
+		height: 44px;
+		background: #fee2e2;
+		border: 1.5px solid #fecaca;
+		border-radius: 0.9rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: #ef4444;
+	}
+
+	:root[data-theme='dark'] .contam_avatar {
+		background: rgba(239, 68, 68, 0.15);
+		border-color: rgba(239, 68, 68, 0.3);
+	}
+
+	.contam_info {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+	}
+
+	.contam_name_row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+
+	.contam_name {
+		font-size: 0.85rem;
+		font-weight: 800;
+		color: var(--ecochitas-ink);
+		font-family: 'Sora', 'Plus Jakarta Sans', sans-serif;
+	}
+
+	.contam_badge {
+		flex-shrink: 0;
+		font-size: 0.68rem;
+		font-weight: 800;
+		color: white;
+		background: #ef4444;
+		padding: 0.18rem 0.55rem;
+		border-radius: 999px;
+		font-family: 'Sora', sans-serif;
+	}
+
+	.contam_location {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.75rem;
+		color: var(--ecochitas-muted);
+	}
+
+	.contam_meta_row {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		flex-wrap: wrap;
+	}
+
+	.contam_status {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.68rem;
+		font-weight: 700;
+		padding: 0.18rem 0.5rem;
+		border-radius: 999px;
+		line-height: 1.4;
+	}
+
+	.contam_status_pending {
+		background: #fef2f2;
+		color: #b91c1c;
+		border: 1px solid #fecaca;
+	}
+
+	:root[data-theme='dark'] .contam_status_pending {
+		background: rgba(239, 68, 68, 0.12);
+		color: #fca5a5;
+		border-color: rgba(239, 68, 68, 0.3);
+	}
+
+	.contam_status_warning {
+		background: #fffbeb;
+		color: #92400e;
+		border: 1px solid #fde68a;
+	}
+
+	:root[data-theme='dark'] .contam_status_warning {
+		background: rgba(245, 158, 11, 0.12);
+		color: #fcd34d;
+		border-color: rgba(245, 158, 11, 0.3);
+	}
+
+	.contam_status_investigating {
+		background: #eff6ff;
+		color: #1e40af;
+		border: 1px solid #bfdbfe;
+	}
+
+	:root[data-theme='dark'] .contam_status_investigating {
+		background: rgba(59, 130, 246, 0.12);
+		color: #93c5fd;
+		border-color: rgba(59, 130, 246, 0.3);
+	}
+
+	.contam_date {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.28rem;
+		font-size: 0.68rem;
+		color: var(--ecochitas-muted);
 	}
 
 	/* ── Responsive ── */

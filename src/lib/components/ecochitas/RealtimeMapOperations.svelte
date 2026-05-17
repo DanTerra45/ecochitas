@@ -254,6 +254,9 @@
 	let truck_stream_connection: EventSource | null = null;
 	let map_popup_instance: import('maplibre-gl').Popup | null = null;
 	let user_marker_instance: import('maplibre-gl').Marker | null = null;
+	let active_truck_popup_identifier: string | null = null;
+	let should_keep_stream_connected = false;
+	let stream_reconnect_timeout_identifier: number | null = null;
 	let has_registered_layer_interactions = false;
 	let latest_positions_by_truck_identifier = new SvelteMap<string, Truck_latest_position>();
 	let latest_snap_state_by_truck_identifier = new SvelteMap<string, Truck_route_snap_state>();
@@ -826,7 +829,7 @@
 	function open_popup(
 		clicked_coordinates: [number, number],
 		popup_html: string,
-		associated_truck_identifier: string | null
+		associated_truck_identifier: string | null = null
 	) {
 		if (!map_instance || !maplibre_library) return;
 
@@ -846,50 +849,6 @@
 			active_truck_popup_identifier = null;
 			map_popup_instance = null;
 		});
-	}
-
-	function add_user_marker() {
-		if (!map_instance || !maplibre_library) return;
-
-		const el = document.createElement('div');
-		el.style.cssText = 'position:relative;width:20px;height:20px;cursor:default;';
-
-		const pulse = document.createElement('div');
-		pulse.style.cssText = [
-			'position:absolute;top:50%;left:50%;',
-			'width:36px;height:36px;',
-			'margin:-18px 0 0 -18px;',
-			'border-radius:50%;',
-			'background:rgba(59,130,246,0.25);',
-			'animation:eco_pulse 2s ease-out infinite;'
-		].join('');
-
-		const dot = document.createElement('div');
-		dot.style.cssText = [
-			'position:absolute;top:50%;left:50%;',
-			'width:14px;height:14px;',
-			'margin:-7px 0 0 -7px;',
-			'border-radius:50%;',
-			'background:#3b82f6;',
-			'border:3px solid #fff;',
-			'box-shadow:0 2px 8px rgba(59,130,246,0.6);'
-		].join('');
-
-		el.appendChild(pulse);
-		el.appendChild(dot);
-
-		const style_el = document.getElementById('eco_pulse_style');
-		if (!style_el) {
-			const s = document.createElement('style');
-			s.id = 'eco_pulse_style';
-			s.textContent = '@keyframes eco_pulse{0%{transform:scale(0.6);opacity:0.8}70%{transform:scale(1.8);opacity:0}100%{transform:scale(2.2);opacity:0}}';
-			document.head.appendChild(s);
-		}
-
-		user_marker_instance = new maplibre_library.Marker({ element: el })
-			.setLngLat([cochabamba_center_longitude - 0.0015, cochabamba_center_latitude + 0.005])
-			.setPopup(new maplibre_library.Popup({ offset: 20, maxWidth: '220px' }).setHTML(build_user_popup_html()))
-			.addTo(map_instance);
 	}
 
 	function add_user_marker() {

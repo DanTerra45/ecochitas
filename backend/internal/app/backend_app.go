@@ -53,7 +53,7 @@ func New_backend_app() (*Backend_app, error) {
 
 	bin_repository := storage.New_bin_repository(postgres_pool)
 	truck_position_repository := storage.New_truck_position_repository(postgres_pool)
-	route_repository := storage.New_route_repository(postgres_pool)
+	route_repository := storage.New_route_repository(postgres_pool, application_config.Osrm_base_url)
 	recycling_zone_repository := storage.New_recycling_zone_repository(postgres_pool)
 	operations_repository := storage.New_operations_repository(postgres_pool)
 	truck_position_stream := realtime.New_truck_position_stream(application_logger)

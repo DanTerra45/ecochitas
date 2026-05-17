@@ -32,6 +32,8 @@
 		longitude: number;
 	};
 
+	type Route_road_path_coordinate = [number, number];
+
 	type Collection_route_view = {
 		route_identifier: string;
 		route_code: string;
@@ -41,6 +43,7 @@
 		is_active: boolean;
 		stop_total: number;
 		path_coordinates: Route_path_coordinate[];
+		road_path_coordinates?: Route_road_path_coordinate[];
 	};
 
 	type Collection_routes_response_payload = {
@@ -55,6 +58,26 @@
 		speed_kmh: number | null;
 		captured_at: string;
 		popup_html: string;
+	};
+
+	type Route_line_candidate = {
+		route_identifier: string;
+		line_coordinates: [number, number][];
+	};
+
+	type Route_projection_match = {
+		route_identifier: string;
+		segment_index: number;
+		snapped_coordinates: [number, number];
+		distance_meters: number;
+	};
+
+	type Truck_route_snap_state = {
+		route_identifier: string;
+		segment_index: number;
+		snapped_coordinates: [number, number];
+		raw_coordinates: [number, number];
+		captured_at_unix_milliseconds: number;
 	};
 
 	type Truck_feature = {
@@ -157,6 +180,10 @@
 	const smart_bins_circle_layer_identifier = 'smart_bins_circle_layer';
 	const acopio_points_source_identifier = 'acopio_points_source';
 	const acopio_points_circle_layer_identifier = 'acopio_points_circle_layer';
+	const truck_route_snap_distance_threshold_meters = 250;
+	const truck_route_snap_segment_window_radius = 6;
+	const truck_route_snap_max_jump_meters = 90;
+	const meters_per_degree_latitude = 110540;
 	const route_line_color_palette = [
 		'#16a34a',
 		'#0284c7',
@@ -229,10 +256,8 @@
 	let user_marker_instance: import('maplibre-gl').Marker | null = null;
 	let has_registered_layer_interactions = false;
 	let latest_positions_by_truck_identifier = new SvelteMap<string, Truck_latest_position>();
+	let latest_snap_state_by_truck_identifier = new SvelteMap<string, Truck_route_snap_state>();
 	let theme_observer: MutationObserver | null = null;
-	let should_keep_stream_connected = false;
-	let stream_reconnect_timeout_identifier: number | null = null;
-
 	onMount(async () => {
 		resolve_backend_api_base_url();
 		await initialize_map();
@@ -423,6 +448,7 @@
 
 	function replace_positions_from_snapshot(snapshot_items: Truck_latest_position[]) {
 		latest_positions_by_truck_identifier.clear();
+		latest_snap_state_by_truck_identifier.clear();
 
 		for (const truck_position_item of snapshot_items) {
 			latest_positions_by_truck_identifier.set(
@@ -441,12 +467,39 @@
 	}
 
 	function upsert_truck_position(truck_position_item: Truck_latest_position) {
+		const existing_truck_position = latest_positions_by_truck_identifier.get(
+			truck_position_item.truck_identifier
+		);
+		if (
+			existing_truck_position &&
+			!is_truck_position_captured_after(existing_truck_position, truck_position_item)
+		) {
+			return;
+		}
+
 		latest_positions_by_truck_identifier.set(
 			truck_position_item.truck_identifier,
 			truck_position_item
 		);
 		sync_positions_list_from_map();
 		sync_truck_source_data();
+	}
+
+	function is_truck_position_captured_after(
+		existing_truck_position: Truck_latest_position,
+		incoming_truck_position: Truck_latest_position
+	): boolean {
+		const existing_captured_at_unix_milliseconds = Date.parse(existing_truck_position.captured_at);
+		const incoming_captured_at_unix_milliseconds = Date.parse(incoming_truck_position.captured_at);
+
+		if (
+			Number.isNaN(existing_captured_at_unix_milliseconds) ||
+			Number.isNaN(incoming_captured_at_unix_milliseconds)
+		) {
+			return true;
+		}
+
+		return incoming_captured_at_unix_milliseconds > existing_captured_at_unix_milliseconds;
 	}
 
 	function sync_positions_list_from_map() {
@@ -632,6 +685,28 @@
 		truck_positions_source.setData(
 			build_truck_feature_collection() as unknown as GeoJSON.FeatureCollection
 		);
+
+		update_active_truck_popup_position();
+	}
+
+	function update_active_truck_popup_position() {
+		if (!map_popup_instance || !active_truck_popup_identifier) {
+			return;
+		}
+		const latest_truck_position = latest_positions_by_truck_identifier.get(
+			active_truck_popup_identifier
+		);
+		if (!latest_truck_position) {
+			return;
+		}
+		const snapped_truck_coordinates =
+			resolve_truck_coordinates_snapped_to_nearest_route(latest_truck_position);
+		map_popup_instance.setLngLat(
+			snapped_truck_coordinates ?? [latest_truck_position.longitude, latest_truck_position.latitude]
+		);
+		map_popup_instance.setHTML(
+			build_truck_marker_popup_html(latest_truck_position, snapped_truck_coordinates)
+		);
 	}
 
 	function sync_collection_route_source_data() {
@@ -717,7 +792,7 @@
 			if (clicked_feature.geometry.type !== 'LineString') return;
 			const clicked_coordinates = layer_mouse_event.lngLat.toArray() as [number, number];
 			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html);
+			open_popup(clicked_coordinates, popup_html, null);
 		});
 
 		map_instance.on('click', collection_route_stops_circle_layer_identifier, (layer_mouse_event) => {
@@ -744,14 +819,20 @@
 			if (clicked_feature.geometry.type !== 'Point') return;
 			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
 			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html);
+			open_popup(clicked_coordinates, popup_html, null);
 		});
 	}
 
-	function open_popup(clicked_coordinates: [number, number], popup_html: string) {
+	function open_popup(
+		clicked_coordinates: [number, number],
+		popup_html: string,
+		associated_truck_identifier: string | null
+	) {
 		if (!map_instance || !maplibre_library) return;
 
 		map_popup_instance?.remove();
+		active_truck_popup_identifier = associated_truck_identifier;
+
 		map_popup_instance = new maplibre_library.Popup({
 			closeButton: true,
 			closeOnClick: true,
@@ -760,6 +841,54 @@
 		})
 			.setLngLat(clicked_coordinates)
 			.setHTML(popup_html)
+			.addTo(map_instance);
+		map_popup_instance.on('close', () => {
+			active_truck_popup_identifier = null;
+			map_popup_instance = null;
+		});
+	}
+
+	function add_user_marker() {
+		if (!map_instance || !maplibre_library) return;
+
+		const el = document.createElement('div');
+		el.style.cssText = 'position:relative;width:20px;height:20px;cursor:default;';
+
+		const pulse = document.createElement('div');
+		pulse.style.cssText = [
+			'position:absolute;top:50%;left:50%;',
+			'width:36px;height:36px;',
+			'margin:-18px 0 0 -18px;',
+			'border-radius:50%;',
+			'background:rgba(59,130,246,0.25);',
+			'animation:eco_pulse 2s ease-out infinite;'
+		].join('');
+
+		const dot = document.createElement('div');
+		dot.style.cssText = [
+			'position:absolute;top:50%;left:50%;',
+			'width:14px;height:14px;',
+			'margin:-7px 0 0 -7px;',
+			'border-radius:50%;',
+			'background:#3b82f6;',
+			'border:3px solid #fff;',
+			'box-shadow:0 2px 8px rgba(59,130,246,0.6);'
+		].join('');
+
+		el.appendChild(pulse);
+		el.appendChild(dot);
+
+		const style_el = document.getElementById('eco_pulse_style');
+		if (!style_el) {
+			const s = document.createElement('style');
+			s.id = 'eco_pulse_style';
+			s.textContent = '@keyframes eco_pulse{0%{transform:scale(0.6);opacity:0.8}70%{transform:scale(1.8);opacity:0}100%{transform:scale(2.2);opacity:0}}';
+			document.head.appendChild(s);
+		}
+
+		user_marker_instance = new maplibre_library.Marker({ element: el })
+			.setLngLat([cochabamba_center_longitude - 0.0015, cochabamba_center_latitude + 0.005])
+			.setPopup(new maplibre_library.Popup({ offset: 20, maxWidth: '220px' }).setHTML(build_user_popup_html()))
 			.addTo(map_instance);
 	}
 
@@ -808,23 +937,37 @@
 	}
 
 	function build_truck_feature_collection(): Truck_feature_collection {
+		const route_line_candidate_list = build_route_line_candidate_list();
+
 		return {
 			type: 'FeatureCollection',
-			features: latest_positions_list.map((truck_position_item) => ({
-				type: 'Feature',
-				geometry: {
-					type: 'Point',
-					coordinates: [truck_position_item.longitude, truck_position_item.latitude]
-				},
-				properties: {
-					truck_identifier: truck_position_item.truck_identifier,
-					latitude: truck_position_item.latitude,
-					longitude: truck_position_item.longitude,
-					speed_kmh: truck_position_item.speed_kmh ?? null,
-					captured_at: truck_position_item.captured_at,
-					popup_html: build_truck_marker_popup_html(truck_position_item)
-				}
-			}))
+			features: latest_positions_list.map((truck_position_item) => {
+				const snapped_truck_coordinates = resolve_truck_coordinates_snapped_to_route_candidates(
+					truck_position_item,
+					route_line_candidate_list
+				);
+				const display_truck_coordinates =
+					snapped_truck_coordinates ?? [truck_position_item.longitude, truck_position_item.latitude];
+
+				return {
+					type: 'Feature',
+					geometry: {
+						type: 'Point',
+						coordinates: display_truck_coordinates as [number, number]
+					},
+					properties: {
+						truck_identifier: truck_position_item.truck_identifier,
+						latitude: display_truck_coordinates[1],
+						longitude: display_truck_coordinates[0],
+						speed_kmh: truck_position_item.speed_kmh ?? null,
+						captured_at: truck_position_item.captured_at,
+						popup_html: build_truck_marker_popup_html(
+							truck_position_item,
+							snapped_truck_coordinates
+						)
+					}
+				};
+			})
 		};
 	}
 
@@ -832,10 +975,9 @@
 		const line_feature_list: Collection_route_line_feature[] = [];
 
 		for (const collection_route_item of collection_routes_list) {
-			const sorted_coordinates = [...collection_route_item.path_coordinates].sort(
-				(left_coordinate, right_coordinate) => left_coordinate.stop_order - right_coordinate.stop_order
-			);
-			if (sorted_coordinates.length < 2) {
+			const resolved_line_coordinates =
+				resolve_collection_route_line_coordinates(collection_route_item);
+			if (resolved_line_coordinates.length < 2) {
 				continue;
 			}
 
@@ -843,10 +985,7 @@
 				type: 'Feature',
 				geometry: {
 					type: 'LineString',
-					coordinates: sorted_coordinates.map((route_coordinate) => [
-						route_coordinate.longitude,
-						route_coordinate.latitude
-					])
+					coordinates: resolved_line_coordinates
 				},
 				properties: {
 					route_identifier: collection_route_item.route_identifier,
@@ -865,6 +1004,252 @@
 			type: 'FeatureCollection',
 			features: line_feature_list
 		};
+	}
+
+	function resolve_collection_route_line_coordinates(
+		collection_route_item: Collection_route_view
+	): [number, number][] {
+		const sorted_path_coordinates = [...collection_route_item.path_coordinates].sort(
+			(left_coordinate, right_coordinate) => left_coordinate.stop_order - right_coordinate.stop_order
+		);
+		const fallback_line_coordinates = sorted_path_coordinates.map((route_coordinate) => [
+			route_coordinate.longitude,
+			route_coordinate.latitude
+		]) as [number, number][];
+		const persisted_road_path_coordinates = collection_route_item.road_path_coordinates ?? [];
+		return persisted_road_path_coordinates.length >= 2
+			? persisted_road_path_coordinates
+			: fallback_line_coordinates;
+	}
+
+	function build_route_line_candidate_list(): Route_line_candidate[] {
+		const route_line_candidate_list: Route_line_candidate[] = [];
+		for (const collection_route_item of collection_routes_list) {
+			const resolved_line_coordinates =
+				resolve_collection_route_line_coordinates(collection_route_item);
+			if (resolved_line_coordinates.length < 2) {
+				continue;
+			}
+
+			route_line_candidate_list.push({
+				route_identifier: collection_route_item.route_identifier,
+				line_coordinates: resolved_line_coordinates
+			});
+		}
+
+		return route_line_candidate_list;
+	}
+
+	function resolve_truck_coordinates_snapped_to_nearest_route(
+		truck_position_item: Truck_latest_position
+	): [number, number] | null {
+		const route_line_candidate_list = build_route_line_candidate_list();
+		return resolve_truck_coordinates_snapped_to_route_candidates(
+			truck_position_item,
+			route_line_candidate_list
+		);
+	}
+
+	function resolve_truck_coordinates_snapped_to_route_candidates(
+		truck_position_item: Truck_latest_position,
+		route_line_candidate_list: Route_line_candidate[]
+	): [number, number] | null {
+		if (route_line_candidate_list.length === 0) {
+			latest_snap_state_by_truck_identifier.delete(truck_position_item.truck_identifier);
+			return null;
+		}
+
+		const truck_coordinates: [number, number] = [
+			truck_position_item.longitude,
+			truck_position_item.latitude
+		];
+		const best_global_projection_match = find_best_route_projection_match(
+			truck_coordinates,
+			route_line_candidate_list
+		);
+		if (!best_global_projection_match) {
+			latest_snap_state_by_truck_identifier.delete(truck_position_item.truck_identifier);
+			return null;
+		}
+		if (best_global_projection_match.distance_meters > truck_route_snap_distance_threshold_meters) {
+			latest_snap_state_by_truck_identifier.delete(truck_position_item.truck_identifier);
+			return null;
+		}
+
+		let selected_projection_match = best_global_projection_match;
+		const previous_snap_state = latest_snap_state_by_truck_identifier.get(
+			truck_position_item.truck_identifier
+		);
+		if (previous_snap_state) {
+			const same_route_candidate = route_line_candidate_list.find(
+				(route_line_candidate) =>
+					route_line_candidate.route_identifier === previous_snap_state.route_identifier
+			);
+			if (same_route_candidate) {
+				const local_projection_match = find_best_route_projection_match(
+					truck_coordinates,
+					[same_route_candidate],
+					previous_snap_state.segment_index - truck_route_snap_segment_window_radius,
+					previous_snap_state.segment_index + truck_route_snap_segment_window_radius
+				);
+				if (
+					local_projection_match &&
+					local_projection_match.distance_meters <= truck_route_snap_distance_threshold_meters
+				) {
+					selected_projection_match = local_projection_match;
+				}
+			}
+
+			const snapped_jump_distance_meters = calculate_distance_meters_between_coordinates(
+				previous_snap_state.snapped_coordinates,
+				selected_projection_match.snapped_coordinates
+			);
+			if (snapped_jump_distance_meters > truck_route_snap_max_jump_meters) {
+				latest_snap_state_by_truck_identifier.delete(truck_position_item.truck_identifier);
+				return null;
+			}
+		}
+
+		const captured_at_unix_milliseconds = Date.parse(truck_position_item.captured_at);
+		latest_snap_state_by_truck_identifier.set(truck_position_item.truck_identifier, {
+			route_identifier: selected_projection_match.route_identifier,
+			segment_index: selected_projection_match.segment_index,
+			snapped_coordinates: selected_projection_match.snapped_coordinates,
+			raw_coordinates: truck_coordinates,
+			captured_at_unix_milliseconds: Number.isNaN(captured_at_unix_milliseconds)
+				? Date.now()
+				: captured_at_unix_milliseconds
+		});
+
+		return selected_projection_match.snapped_coordinates;
+	}
+
+	function find_best_route_projection_match(
+		point_coordinates: [number, number],
+		route_line_candidate_list: Route_line_candidate[],
+		start_segment_index_inclusive: number = 0,
+		end_segment_index_inclusive: number = Number.POSITIVE_INFINITY
+	): Route_projection_match | null {
+		let best_projection_match: Route_projection_match | null = null;
+
+		for (const route_line_candidate of route_line_candidate_list) {
+			const route_segment_count = route_line_candidate.line_coordinates.length - 1;
+			if (route_segment_count <= 0) {
+				continue;
+			}
+
+			const bounded_segment_start_index = Math.max(0, start_segment_index_inclusive);
+			const bounded_segment_end_index = Math.min(
+				route_segment_count - 1,
+				end_segment_index_inclusive
+			);
+			for (
+				let segment_index = bounded_segment_start_index;
+				segment_index <= bounded_segment_end_index;
+				segment_index += 1
+			) {
+				const segment_start_coordinates = route_line_candidate.line_coordinates[segment_index];
+				const segment_end_coordinates = route_line_candidate.line_coordinates[segment_index + 1];
+				const segment_projection_result = project_point_to_route_segment(
+					point_coordinates,
+					segment_start_coordinates,
+					segment_end_coordinates
+				);
+
+				if (
+					!best_projection_match ||
+					segment_projection_result.distance_meters < best_projection_match.distance_meters
+				) {
+					best_projection_match = {
+						route_identifier: route_line_candidate.route_identifier,
+						segment_index,
+						snapped_coordinates: segment_projection_result.snapped_coordinates,
+						distance_meters: segment_projection_result.distance_meters
+					};
+				}
+			}
+		}
+
+		return best_projection_match;
+	}
+
+	function project_point_to_route_segment(
+		point_coordinates: [number, number],
+		segment_start_coordinates: [number, number],
+		segment_end_coordinates: [number, number]
+	): { snapped_coordinates: [number, number]; distance_meters: number } {
+		const point_longitude = point_coordinates[0];
+		const point_latitude = point_coordinates[1];
+		const segment_start_longitude = segment_start_coordinates[0];
+		const segment_start_latitude = segment_start_coordinates[1];
+		const segment_end_longitude = segment_end_coordinates[0];
+		const segment_end_latitude = segment_end_coordinates[1];
+
+		const reference_latitude_radians =
+			((point_latitude + segment_start_latitude + segment_end_latitude) / 3) *
+			(Math.PI / 180);
+		const meters_per_degree_longitude =
+			111320 * Math.cos(reference_latitude_radians);
+
+		const segment_delta_x_meters =
+			(segment_end_longitude - segment_start_longitude) * meters_per_degree_longitude;
+		const segment_delta_y_meters =
+			(segment_end_latitude - segment_start_latitude) * meters_per_degree_latitude;
+		const point_delta_x_meters =
+			(point_longitude - segment_start_longitude) * meters_per_degree_longitude;
+		const point_delta_y_meters =
+			(point_latitude - segment_start_latitude) * meters_per_degree_latitude;
+
+		const segment_length_squared =
+			segment_delta_x_meters * segment_delta_x_meters +
+			segment_delta_y_meters * segment_delta_y_meters;
+		const raw_projection_ratio =
+			segment_length_squared <= 0
+				? 0
+				: (point_delta_x_meters * segment_delta_x_meters +
+						point_delta_y_meters * segment_delta_y_meters) /
+					segment_length_squared;
+		const normalized_projection_ratio = Math.max(0, Math.min(1, raw_projection_ratio));
+
+		const snapped_longitude =
+			segment_start_longitude +
+			(segment_end_longitude - segment_start_longitude) * normalized_projection_ratio;
+		const snapped_latitude =
+			segment_start_latitude +
+			(segment_end_latitude - segment_start_latitude) * normalized_projection_ratio;
+
+		const snapped_delta_x_meters =
+			(point_longitude - snapped_longitude) * meters_per_degree_longitude;
+		const snapped_delta_y_meters =
+			(point_latitude - snapped_latitude) * meters_per_degree_latitude;
+		const snapped_distance_meters = Math.sqrt(
+			snapped_delta_x_meters * snapped_delta_x_meters +
+				snapped_delta_y_meters * snapped_delta_y_meters
+		);
+
+		return {
+			snapped_coordinates: [snapped_longitude, snapped_latitude],
+			distance_meters: snapped_distance_meters
+		};
+	}
+
+	function calculate_distance_meters_between_coordinates(
+		left_coordinates: [number, number],
+		right_coordinates: [number, number]
+	): number {
+		const left_longitude = left_coordinates[0];
+		const left_latitude = left_coordinates[1];
+		const right_longitude = right_coordinates[0];
+		const right_latitude = right_coordinates[1];
+
+		const average_latitude_radians = ((left_latitude + right_latitude) / 2) * (Math.PI / 180);
+		const meters_per_degree_longitude = 111320 * Math.cos(average_latitude_radians);
+		const delta_longitude_meters = (right_longitude - left_longitude) * meters_per_degree_longitude;
+		const delta_latitude_meters = (right_latitude - left_latitude) * meters_per_degree_latitude;
+		return Math.sqrt(
+			delta_longitude_meters * delta_longitude_meters +
+				delta_latitude_meters * delta_latitude_meters
+		);
 	}
 
 	function build_collection_route_stop_feature_collection(): Collection_route_stop_feature_collection {
@@ -972,7 +1357,10 @@
 		return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:0.72rem;font-weight:700;color:${color};background:${bg}">${text}</span>`;
 	}
 
-	function build_truck_marker_popup_html(truck_position_item: Truck_latest_position): string {
+	function build_truck_marker_popup_html(
+		truck_position_item: Truck_latest_position,
+		snapped_truck_coordinates: [number, number] | null = null
+	): string {
 		const speed_label =
 			truck_position_item.speed_kmh == null ? 'N/A' : `${truck_position_item.speed_kmh} km/h`;
 		const rows = [

@@ -11,6 +11,7 @@ type App_config struct {
 	Http_port                             string
 	Postgres_url                          string
 	Nats_url                              string
+	Osrm_base_url                         string
 	Nats_gps_subject                      string
 	Nats_gps_queue_group                  string
 	Nats_bin_sensor_events_subject        string
@@ -58,6 +59,7 @@ func Load_app_config() (App_config, error) {
 		Http_port:                             read_env_string("HTTP_PORT", "8080"),
 		Postgres_url:                          read_env_string("POSTGRES_URL", "postgresql://ecochitas_user:ecochitas_password@localhost:5432/ecochitas_db?sslmode=disable"),
 		Nats_url:                              read_env_string("NATS_URL", "nats://localhost:4222"),
+		Osrm_base_url:                         read_env_string("OSRM_BASE_URL", "https://router.project-osrm.org"),
 		Nats_gps_subject:                      read_env_string("NATS_GPS_SUBJECT", "gps.trucks.location"),
 		Nats_gps_queue_group:                  read_env_string("NATS_GPS_QUEUE_GROUP", "ecochitas_gps_workers"),
 		Nats_bin_sensor_events_subject:        read_env_string("NATS_BIN_SENSOR_EVENTS_SUBJECT", "operations.bins.sensor_events"),

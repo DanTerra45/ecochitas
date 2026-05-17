@@ -16,7 +16,6 @@
 		{ href: '/', label: 'Inicio', icon_name: 'home' },
 		{ href: '/map', label: 'Mapa', icon_name: 'map' },
 		{ href: '/recycling', label: 'Reciclaje', icon_name: 'recycling' },
-		{ href: '/rewards', label: 'Puntos', icon_name: 'rewards' },
 		{ href: '/profile', label: 'Perfil', icon_name: 'profile' }
 	];
 
@@ -24,7 +23,6 @@
 		'/': 'Resumen operativo',
 		'/map': 'Monitoreo en tiempo real',
 		'/recycling': 'Guia de reciclaje',
-		'/rewards': 'Bonificaciones por zona',
 		'/profile': 'Cuenta ciudadana'
 	};
 
@@ -307,7 +305,7 @@
 		right: 0.9rem;
 		bottom: 0.9rem;
 		display: grid;
-		grid-template-columns: repeat(5, 1fr);
+		grid-template-columns: repeat(4, 1fr);
 		align-items: end;
 		gap: 0.35rem;
 		padding: 0.5rem 0.45rem;

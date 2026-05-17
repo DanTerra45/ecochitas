@@ -30,7 +30,7 @@
 			icon_name: 'alert'
 		},
 		{
-			label: 'Puntos comunitarios',
+			label: 'Puntos de acopio',
 			value: '9,240',
 			helper_text: 'bonificaciones del mes',
 			icon_name: 'rewards'
@@ -58,7 +58,7 @@
 	</p>
 	<div class="hero_actions">
 		<a href={resolve(map_route_path)} class="btn_primary">Abrir Mapa Operativo</a>
-		<a href="#flujo" class="btn_secondary">Ver Flujo</a>
+		<a href="/recycling" class="btn_secondary">Cómo funciona</a>
 	</div>
 </section>
 

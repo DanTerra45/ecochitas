@@ -120,6 +120,28 @@
 		features: Collection_route_stop_feature[];
 	};
 
+	type SmartBin = {
+		id: string;
+		label: string;
+		lat: number;
+		lng: number;
+		capacity_pct: number;
+		zone: string;
+		last_updated: string;
+	};
+
+	type AcopioMarker = {
+		id: string;
+		name: string;
+		address: string;
+		zone: string;
+		schedule: string;
+		lat: number;
+		lng: number;
+		capacity_pct: number;
+		materials: string;
+	};
+
 	const cochabamba_center_latitude = -17.3935;
 	const cochabamba_center_longitude = -66.157;
 	const default_backend_api_base_url = 'http://127.0.0.1:8080';
@@ -131,6 +153,10 @@
 	const collection_routes_line_layer_identifier = 'collection_routes_line_layer';
 	const collection_route_stops_source_identifier = 'collection_route_stops_source';
 	const collection_route_stops_circle_layer_identifier = 'collection_route_stops_circle_layer';
+	const smart_bins_source_identifier = 'smart_bins_source';
+	const smart_bins_circle_layer_identifier = 'smart_bins_circle_layer';
+	const acopio_points_source_identifier = 'acopio_points_source';
+	const acopio_points_circle_layer_identifier = 'acopio_points_circle_layer';
 	const route_line_color_palette = [
 		'#16a34a',
 		'#0284c7',
@@ -140,6 +166,27 @@
 		'#ea580c',
 		'#2563eb',
 		'#e11d48'
+	];
+
+	const mock_smart_bins: SmartBin[] = [
+		{ id: 'b01', label: 'Contenedor A-01', lat: -17.3835, lng: -66.1570, capacity_pct: 45, zone: 'Zona Norte', last_updated: 'hace 12 min' },
+		{ id: 'b02', label: 'Contenedor A-02', lat: -17.3855, lng: -66.1610, capacity_pct: 88, zone: 'Zona Norte', last_updated: 'hace 8 min' },
+		{ id: 'b03', label: 'Contenedor B-01', lat: -17.3910, lng: -66.1640, capacity_pct: 32, zone: 'Zona Central', last_updated: 'hace 5 min' },
+		{ id: 'b04', label: 'Contenedor B-02', lat: -17.3930, lng: -66.1510, capacity_pct: 91, zone: 'Zona Central', last_updated: 'hace 3 min' },
+		{ id: 'b05', label: 'Contenedor C-01', lat: -17.3985, lng: -66.1580, capacity_pct: 60, zone: 'Zona Sur', last_updated: 'hace 20 min' },
+		{ id: 'b06', label: 'Contenedor C-02', lat: -17.4010, lng: -66.1555, capacity_pct: 78, zone: 'Zona Sur', last_updated: 'hace 15 min' },
+		{ id: 'b07', label: 'Contenedor D-01', lat: -17.3872, lng: -66.1490, capacity_pct: 95, zone: 'Zona Este', last_updated: 'hace 2 min' },
+		{ id: 'b08', label: 'Contenedor D-02', lat: -17.3900, lng: -66.1460, capacity_pct: 22, zone: 'Zona Este', last_updated: 'hace 30 min' },
+		{ id: 'b09', label: 'Contenedor E-01', lat: -17.3960, lng: -66.1690, capacity_pct: 55, zone: 'Zona Oeste', last_updated: 'hace 18 min' },
+		{ id: 'b10', label: 'Contenedor E-02', lat: -17.4005, lng: -66.1720, capacity_pct: 83, zone: 'Zona Oeste', last_updated: 'hace 10 min' }
+	];
+
+	const mock_acopio_points: AcopioMarker[] = [
+		{ id: 'a01', name: 'Centro de Acopio Norte', address: 'Av. América 2345', zone: 'Zona Norte', schedule: 'Lun–Sáb 8:00–18:00', lat: -17.3840, lng: -66.1600, capacity_pct: 45, materials: 'Plástico · Papel · Cartón · Vidrio' },
+		{ id: 'a02', name: 'Acopio Villa Pagador', address: 'Calle Sucre 1100', zone: 'Zona Sur', schedule: 'Mar–Dom 9:00–17:00', lat: -17.4020, lng: -66.1560, capacity_pct: 70, materials: 'Metal · Electrónico · Plástico' },
+		{ id: 'a03', name: 'Acopio Queru Queru', address: 'Av. Blanco Galindo km 3', zone: 'Zona Oeste', schedule: 'Lun–Vie 7:00–16:00', lat: -17.3950, lng: -66.1700, capacity_pct: 30, materials: 'Orgánico · Papel · Cartón' },
+		{ id: 'a04', name: 'Acopio Colón', address: 'Plaza Colón 500', zone: 'Zona Central', schedule: 'Lun–Dom 8:00–20:00', lat: -17.3925, lng: -66.1565, capacity_pct: 85, materials: 'Plástico · Vidrio · Metal · Aceite' },
+		{ id: 'a05', name: 'Acopio Muyurina', address: 'Av. Aniceto Arce 800', zone: 'Zona Este', schedule: 'Mié–Dom 10:00–18:00', lat: -17.3875, lng: -66.1480, capacity_pct: 55, materials: 'Pilas · Electrónico · Plástico' }
 	];
 
 	function get_map_style(is_dark: boolean): import('maplibre-gl').StyleSpecification {
@@ -179,6 +226,7 @@
 	let map_resize_observer: ResizeObserver | null = null;
 	let truck_stream_connection: EventSource | null = null;
 	let map_popup_instance: import('maplibre-gl').Popup | null = null;
+	let user_marker_instance: import('maplibre-gl').Marker | null = null;
 	let has_registered_layer_interactions = false;
 	let latest_positions_by_truck_identifier = new SvelteMap<string, Truck_latest_position>();
 	let theme_observer: MutationObserver | null = null;
@@ -191,6 +239,7 @@
 		setup_map_resize_observer();
 		setup_theme_observer();
 		await Promise.all([load_latest_positions_snapshot(), load_collection_routes_snapshot()]);
+		add_user_marker();
 		should_keep_stream_connected = true;
 		connect_truck_stream();
 	});
@@ -199,6 +248,8 @@
 		should_keep_stream_connected = false;
 		clear_stream_reconnect_timeout();
 		disconnect_truck_stream();
+		user_marker_instance?.remove();
+		user_marker_instance = null;
 		destroy_map();
 		theme_observer?.disconnect();
 	});
@@ -272,6 +323,8 @@
 			ensure_layers_ready();
 			sync_truck_source_data();
 			sync_collection_route_source_data();
+			sync_smart_bin_source_data();
+			sync_acopio_source_data();
 		});
 	}
 
@@ -296,6 +349,8 @@
 			ensure_layers_ready();
 			sync_truck_source_data();
 			sync_collection_route_source_data();
+			sync_smart_bin_source_data();
+			sync_acopio_source_data();
 		});
 	}
 
@@ -404,6 +459,8 @@
 	function ensure_layers_ready() {
 		ensure_truck_layers_ready();
 		ensure_collection_route_layers_ready();
+		ensure_smart_bin_layers_ready();
+		ensure_acopio_layers_ready();
 	}
 
 	function ensure_truck_layers_ready() {
@@ -496,6 +553,68 @@
 		}
 	}
 
+	function ensure_smart_bin_layers_ready() {
+		if (!map_instance) return;
+
+		if (!map_instance.getSource(smart_bins_source_identifier)) {
+			map_instance.addSource(smart_bins_source_identifier, {
+				type: 'geojson',
+				data: build_smart_bin_feature_collection() as unknown as GeoJSON.FeatureCollection
+			});
+		}
+
+		if (!map_instance.getLayer(smart_bins_circle_layer_identifier)) {
+			map_instance.addLayer({
+				id: smart_bins_circle_layer_identifier,
+				type: 'circle',
+				source: smart_bins_source_identifier,
+				paint: {
+					'circle-color': [
+						'case',
+						['>=', ['get', 'capacity_pct'], 80], '#ef4444',
+						['>=', ['get', 'capacity_pct'], 60], '#f59e0b',
+						'#16a34a'
+					],
+					'circle-radius': 6,
+					'circle-stroke-color': [
+						'case',
+						['>=', ['get', 'capacity_pct'], 80], '#991b1b',
+						['>=', ['get', 'capacity_pct'], 60], '#92400e',
+						'#14532d'
+					],
+					'circle-stroke-width': 1.8,
+					'circle-opacity': 0.92
+				}
+			});
+		}
+	}
+
+	function ensure_acopio_layers_ready() {
+		if (!map_instance) return;
+
+		if (!map_instance.getSource(acopio_points_source_identifier)) {
+			map_instance.addSource(acopio_points_source_identifier, {
+				type: 'geojson',
+				data: build_acopio_feature_collection() as unknown as GeoJSON.FeatureCollection
+			});
+		}
+
+		if (!map_instance.getLayer(acopio_points_circle_layer_identifier)) {
+			map_instance.addLayer({
+				id: acopio_points_circle_layer_identifier,
+				type: 'circle',
+				source: acopio_points_source_identifier,
+				paint: {
+					'circle-color': '#0284c7',
+					'circle-radius': 8,
+					'circle-stroke-color': '#075985',
+					'circle-stroke-width': 2,
+					'circle-opacity': 0.9
+				}
+			});
+		}
+	}
+
 	function sync_truck_source_data() {
 		if (!map_instance || !map_instance.isStyleLoaded()) {
 			return;
@@ -541,66 +660,88 @@
 		}
 	}
 
+	function sync_smart_bin_source_data() {
+		if (!map_instance || !map_instance.isStyleLoaded()) return;
+		ensure_smart_bin_layers_ready();
+		const src = map_instance.getSource(smart_bins_source_identifier) as
+			| import('maplibre-gl').GeoJSONSource
+			| undefined;
+		src?.setData(build_smart_bin_feature_collection() as unknown as GeoJSON.FeatureCollection);
+	}
+
+	function sync_acopio_source_data() {
+		if (!map_instance || !map_instance.isStyleLoaded()) return;
+		ensure_acopio_layers_ready();
+		const src = map_instance.getSource(acopio_points_source_identifier) as
+			| import('maplibre-gl').GeoJSONSource
+			| undefined;
+		src?.setData(build_acopio_feature_collection() as unknown as GeoJSON.FeatureCollection);
+	}
+
 	function register_layer_interactions() {
 		if (!map_instance || !maplibre_library) {
 			return;
 		}
 
-		map_instance.on('mouseenter', truck_positions_circle_layer_identifier, () => {
-			if (!map_instance) return;
-			map_instance.getCanvas().style.cursor = 'pointer';
-		});
+		const clickable_layers = [
+			truck_positions_circle_layer_identifier,
+			collection_routes_line_layer_identifier,
+			collection_route_stops_circle_layer_identifier,
+			smart_bins_circle_layer_identifier,
+			acopio_points_circle_layer_identifier
+		];
 
-		map_instance.on('mouseleave', truck_positions_circle_layer_identifier, () => {
-			if (!map_instance) return;
-			map_instance.getCanvas().style.cursor = '';
-		});
+		for (const layer_id of clickable_layers) {
+			map_instance.on('mouseenter', layer_id, () => {
+				if (!map_instance) return;
+				map_instance.getCanvas().style.cursor = 'pointer';
+			});
+			map_instance.on('mouseleave', layer_id, () => {
+				if (!map_instance) return;
+				map_instance.getCanvas().style.cursor = '';
+			});
+		}
 
 		map_instance.on('click', truck_positions_circle_layer_identifier, (layer_mouse_event) => {
 			const clicked_feature = layer_mouse_event.features?.[0];
 			if (!clicked_feature || !map_instance || !maplibre_library) return;
 			if (clicked_feature.geometry.type !== 'Point') return;
-
 			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
 			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
 			open_popup(clicked_coordinates, popup_html);
-		});
-
-		map_instance.on('mouseenter', collection_routes_line_layer_identifier, () => {
-			if (!map_instance) return;
-			map_instance.getCanvas().style.cursor = 'pointer';
-		});
-
-		map_instance.on('mouseleave', collection_routes_line_layer_identifier, () => {
-			if (!map_instance) return;
-			map_instance.getCanvas().style.cursor = '';
 		});
 
 		map_instance.on('click', collection_routes_line_layer_identifier, (layer_mouse_event) => {
 			const clicked_feature = layer_mouse_event.features?.[0];
 			if (!clicked_feature || !map_instance || !maplibre_library) return;
 			if (clicked_feature.geometry.type !== 'LineString') return;
-
 			const clicked_coordinates = layer_mouse_event.lngLat.toArray() as [number, number];
 			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
 			open_popup(clicked_coordinates, popup_html);
-		});
-
-		map_instance.on('mouseenter', collection_route_stops_circle_layer_identifier, () => {
-			if (!map_instance) return;
-			map_instance.getCanvas().style.cursor = 'pointer';
-		});
-
-		map_instance.on('mouseleave', collection_route_stops_circle_layer_identifier, () => {
-			if (!map_instance) return;
-			map_instance.getCanvas().style.cursor = '';
 		});
 
 		map_instance.on('click', collection_route_stops_circle_layer_identifier, (layer_mouse_event) => {
 			const clicked_feature = layer_mouse_event.features?.[0];
 			if (!clicked_feature || !map_instance || !maplibre_library) return;
 			if (clicked_feature.geometry.type !== 'Point') return;
+			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
+			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
+			open_popup(clicked_coordinates, popup_html);
+		});
 
+		map_instance.on('click', smart_bins_circle_layer_identifier, (layer_mouse_event) => {
+			const clicked_feature = layer_mouse_event.features?.[0];
+			if (!clicked_feature || !map_instance || !maplibre_library) return;
+			if (clicked_feature.geometry.type !== 'Point') return;
+			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
+			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
+			open_popup(clicked_coordinates, popup_html);
+		});
+
+		map_instance.on('click', acopio_points_circle_layer_identifier, (layer_mouse_event) => {
+			const clicked_feature = layer_mouse_event.features?.[0];
+			if (!clicked_feature || !map_instance || !maplibre_library) return;
+			if (clicked_feature.geometry.type !== 'Point') return;
 			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
 			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
 			open_popup(clicked_coordinates, popup_html);
@@ -614,10 +755,55 @@
 		map_popup_instance = new maplibre_library.Popup({
 			closeButton: true,
 			closeOnClick: true,
-			offset: 16
+			offset: 16,
+			maxWidth: '280px'
 		})
 			.setLngLat(clicked_coordinates)
 			.setHTML(popup_html)
+			.addTo(map_instance);
+	}
+
+	function add_user_marker() {
+		if (!map_instance || !maplibre_library) return;
+
+		const el = document.createElement('div');
+		el.style.cssText = 'position:relative;width:20px;height:20px;cursor:default;';
+
+		const pulse = document.createElement('div');
+		pulse.style.cssText = [
+			'position:absolute;top:50%;left:50%;',
+			'width:36px;height:36px;',
+			'margin:-18px 0 0 -18px;',
+			'border-radius:50%;',
+			'background:rgba(59,130,246,0.25);',
+			'animation:eco_pulse 2s ease-out infinite;'
+		].join('');
+
+		const dot = document.createElement('div');
+		dot.style.cssText = [
+			'position:absolute;top:50%;left:50%;',
+			'width:14px;height:14px;',
+			'margin:-7px 0 0 -7px;',
+			'border-radius:50%;',
+			'background:#3b82f6;',
+			'border:3px solid #fff;',
+			'box-shadow:0 2px 8px rgba(59,130,246,0.6);'
+		].join('');
+
+		el.appendChild(pulse);
+		el.appendChild(dot);
+
+		const style_el = document.getElementById('eco_pulse_style');
+		if (!style_el) {
+			const s = document.createElement('style');
+			s.id = 'eco_pulse_style';
+			s.textContent = '@keyframes eco_pulse{0%{transform:scale(0.6);opacity:0.8}70%{transform:scale(1.8);opacity:0}100%{transform:scale(2.2);opacity:0}}';
+			document.head.appendChild(s);
+		}
+
+		user_marker_instance = new maplibre_library.Marker({ element: el })
+			.setLngLat([cochabamba_center_longitude - 0.0015, cochabamba_center_latitude + 0.005])
+			.setPopup(new maplibre_library.Popup({ offset: 20, maxWidth: '220px' }).setHTML(build_user_popup_html()))
 			.addTo(map_instance);
 	}
 
@@ -714,6 +900,41 @@
 		};
 	}
 
+	function build_smart_bin_feature_collection() {
+		return {
+			type: 'FeatureCollection',
+			features: mock_smart_bins.map((bin) => ({
+				type: 'Feature',
+				geometry: { type: 'Point', coordinates: [bin.lng, bin.lat] },
+				properties: {
+					id: bin.id,
+					label: bin.label,
+					zone: bin.zone,
+					capacity_pct: bin.capacity_pct,
+					last_updated: bin.last_updated,
+					popup_html: build_smart_bin_popup_html(bin)
+				}
+			}))
+		};
+	}
+
+	function build_acopio_feature_collection() {
+		return {
+			type: 'FeatureCollection',
+			features: mock_acopio_points.map((pt) => ({
+				type: 'Feature',
+				geometry: { type: 'Point', coordinates: [pt.lng, pt.lat] },
+				properties: {
+					id: pt.id,
+					name: pt.name,
+					zone: pt.zone,
+					capacity_pct: pt.capacity_pct,
+					popup_html: build_acopio_popup_html(pt)
+				}
+			}))
+		};
+	}
+
 	function resolve_route_line_color(route_identifier: string): string {
 		const route_identifier_hash = hash_string(route_identifier);
 		const color_palette_index = route_identifier_hash % route_line_color_palette.length;
@@ -729,39 +950,113 @@
 		return hash_accumulator;
 	}
 
+	function popup_card(icon: string, title: string, rows: string, cta?: string): string {
+		return `<div style="font-family:system-ui,sans-serif;padding:2px 0">
+			<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+				<span style="font-size:1.15rem">${icon}</span>
+				<strong style="font-size:0.9rem;color:#0f172a">${title}</strong>
+			</div>
+			<div style="display:grid;gap:4px;font-size:0.8rem;color:#475569">${rows}</div>
+			${cta ? `<div style="margin-top:10px">${cta}</div>` : ''}
+		</div>`;
+	}
+
+	function popup_row(label: string, value: string): string {
+		return `<div style="display:flex;justify-content:space-between;gap:12px">
+			<span style="color:#94a3b8">${label}</span>
+			<span style="font-weight:600;color:#1e293b">${value}</span>
+		</div>`;
+	}
+
+	function popup_badge(text: string, color: string, bg: string): string {
+		return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:0.72rem;font-weight:700;color:${color};background:${bg}">${text}</span>`;
+	}
+
 	function build_truck_marker_popup_html(truck_position_item: Truck_latest_position): string {
 		const speed_label =
 			truck_position_item.speed_kmh == null ? 'N/A' : `${truck_position_item.speed_kmh} km/h`;
-		return `
-			<strong>${truck_position_item.truck_identifier}</strong><br/>
-			Lat: ${truck_position_item.latitude}<br/>
-			Lng: ${truck_position_item.longitude}<br/>
-			Speed: ${speed_label}<br/>
-			Captured: ${truck_position_item.captured_at}
-		`;
+		const rows = [
+			popup_row('ID', truck_position_item.truck_identifier),
+			popup_row('Velocidad', speed_label),
+			popup_row('Lat / Lng', `${truck_position_item.latitude.toFixed(4)}, ${truck_position_item.longitude.toFixed(4)}`),
+			popup_row('Actualizado', truck_position_item.captured_at)
+		].join('');
+		return popup_card('🚛', 'Carro recolector', rows);
 	}
 
 	function build_collection_route_popup_html(collection_route_item: Collection_route_view): string {
-		return `
-			<strong>${collection_route_item.route_code}</strong><br/>
-			${collection_route_item.route_name}<br/>
-			Zona: ${collection_route_item.zone_name}<br/>
-			Dia: ${collection_route_item.collection_weekday}<br/>
-			Paradas: ${collection_route_item.stop_total}
-		`;
+		const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+		const day_label = days[collection_route_item.collection_weekday] ?? String(collection_route_item.collection_weekday);
+		const rows = [
+			popup_row('Código', collection_route_item.route_code),
+			popup_row('Zona', collection_route_item.zone_name),
+			popup_row('Día de recolección', day_label),
+			popup_row('Paradas', String(collection_route_item.stop_total))
+		].join('');
+		return popup_card('🗺️', collection_route_item.route_name, rows);
 	}
 
 	function build_collection_route_stop_popup_html(
 		collection_route_item: Collection_route_view,
 		route_stop_coordinate: Route_path_coordinate
 	): string {
-		return `
-			<strong>${collection_route_item.route_code}</strong><br/>
-			Parada #${route_stop_coordinate.stop_order}<br/>
-			Contenedor: ${route_stop_coordinate.bin_code}<br/>
-			Lat: ${route_stop_coordinate.latitude}<br/>
-			Lng: ${route_stop_coordinate.longitude}
-		`;
+		const rows = [
+			popup_row('Ruta', collection_route_item.route_code),
+			popup_row('Parada', `#${route_stop_coordinate.stop_order}`),
+			popup_row('Contenedor', route_stop_coordinate.bin_code)
+		].join('');
+		return popup_card('📍', `Parada de ruta`, rows);
+	}
+
+	function build_smart_bin_popup_html(bin: SmartBin): string {
+		const cap = bin.capacity_pct;
+		const status_color = cap >= 80 ? '#ef4444' : cap >= 60 ? '#f59e0b' : '#16a34a';
+		const status_bg = cap >= 80 ? '#fef2f2' : cap >= 60 ? '#fffbeb' : '#f0fdf4';
+		const status_label = cap >= 80 ? 'Saturado' : cap >= 60 ? 'Moderado' : 'Disponible';
+		const bar = `<div style="margin:8px 0 4px">
+			<div style="display:flex;justify-content:space-between;font-size:0.72rem;margin-bottom:3px">
+				<span style="color:#94a3b8">Capacidad</span>
+				<span style="font-weight:700;color:${status_color}">${cap}%</span>
+			</div>
+			<div style="height:6px;border-radius:999px;background:#e2e8f0;overflow:hidden">
+				<div style="height:100%;width:${cap}%;background:${status_color};border-radius:999px"></div>
+			</div>
+		</div>`;
+		const rows = [
+			popup_row('Zona', bin.zone),
+			popup_row('Actualizado', bin.last_updated)
+		].join('');
+		const badge = popup_badge(status_label, status_color, status_bg);
+		return popup_card('🗑️', bin.label, `${badge}${bar}${rows}`);
+	}
+
+	function build_acopio_popup_html(pt: AcopioMarker): string {
+		const cap = pt.capacity_pct;
+		const cap_color = cap >= 85 ? '#ef4444' : cap >= 60 ? '#f59e0b' : '#16a34a';
+		const bar = `<div style="margin:8px 0 4px">
+			<div style="display:flex;justify-content:space-between;font-size:0.72rem;margin-bottom:3px">
+				<span style="color:#94a3b8">Capacidad</span>
+				<span style="font-weight:700;color:${cap_color}">${cap}%</span>
+			</div>
+			<div style="height:6px;border-radius:999px;background:#e2e8f0;overflow:hidden">
+				<div style="height:100%;width:${cap}%;background:${cap_color};border-radius:999px"></div>
+			</div>
+		</div>`;
+		const rows = [
+			popup_row('Dirección', pt.address),
+			popup_row('Zona', pt.zone),
+			popup_row('Horario', pt.schedule),
+			popup_row('Materiales', pt.materials)
+		].join('');
+		const cta = `<a href="/recycling" style="display:block;text-align:center;padding:6px;border-radius:8px;background:#0284c7;color:#fff;font-size:0.78rem;font-weight:600;text-decoration:none">Ver más detalles →</a>`;
+		return popup_card('♻️', pt.name, `${bar}${rows}`, cta);
+	}
+
+	function build_user_popup_html(): string {
+		return popup_card('📍', 'Estás aquí', [
+			popup_row('Zona', 'Zona Norte'),
+			popup_row('Acopio más cercano', 'Av. América 2345')
+		].join(''));
 	}
 
 	function clear_stream_reconnect_timeout() {
@@ -851,6 +1146,40 @@
 	<div>Camiones en vivo: {latest_positions_list.length}</div>
 </div>
 
+<div class="map_legend">
+	<p class="legend_title">Leyenda</p>
+	<div class="legend_items">
+		<div class="legend_row">
+			<span class="legend_dot" style="background:#18a26e;border-color:#0a5e4a"></span>
+			<span>Carro recolector</span>
+		</div>
+		<div class="legend_row">
+			<span class="legend_dot" style="background:#16a34a;border-color:#14532d"></span>
+			<span>Contenedor OK</span>
+		</div>
+		<div class="legend_row">
+			<span class="legend_dot" style="background:#f59e0b;border-color:#92400e"></span>
+			<span>Contenedor moderado</span>
+		</div>
+		<div class="legend_row">
+			<span class="legend_dot" style="background:#ef4444;border-color:#991b1b"></span>
+			<span>Contenedor saturado</span>
+		</div>
+		<div class="legend_row">
+			<span class="legend_dot" style="background:#0284c7;border-color:#075985"></span>
+			<span>Punto de acopio</span>
+		</div>
+		<div class="legend_row">
+			<span class="legend_dot" style="background:#3b82f6;border-color:#fff"></span>
+			<span>Estás aquí</span>
+		</div>
+		<div class="legend_row">
+			<span class="legend_line"></span>
+			<span>Ruta de recolección</span>
+		</div>
+	</div>
+</div>
+
 <style>
 	.map_fullscreen {
 		position: fixed;
@@ -881,6 +1210,71 @@
 		word-break: break-all;
 	}
 
+	.map_legend {
+		position: fixed;
+		left: 1rem;
+		bottom: 5rem;
+		z-index: 40;
+		padding: 0.75rem 1rem;
+		border-radius: 0.9rem;
+		background: oklch(0.98 0 0 / 0.88);
+		border: 1px solid oklch(0.85 0 0 / 0.6);
+		backdrop-filter: blur(12px);
+		-webkit-backdrop-filter: blur(12px);
+		box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+		min-width: 170px;
+	}
+
+	:global([data-theme='dark']) .map_legend {
+		background: oklch(0.18 0 0 / 0.88);
+		border-color: oklch(1 0 0 / 0.12);
+	}
+
+	.legend_title {
+		margin: 0 0 0.55rem;
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: #64748b;
+	}
+
+	.legend_items {
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+	}
+
+	.legend_row {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		font-size: 0.75rem;
+		color: #334155;
+	}
+
+	:global([data-theme='dark']) .legend_row {
+		color: #cbd5e1;
+	}
+
+	.legend_dot {
+		display: inline-block;
+		width: 11px;
+		height: 11px;
+		border-radius: 50%;
+		border: 2px solid;
+		flex-shrink: 0;
+	}
+
+	.legend_line {
+		display: inline-block;
+		width: 18px;
+		height: 3px;
+		border-radius: 999px;
+		background: linear-gradient(to right, #16a34a, #0284c7);
+		flex-shrink: 0;
+	}
+
 	@media (max-width: 1023px) {
 		.map_status_panel {
 			top: 5.4rem;
@@ -888,10 +1282,33 @@
 			left: 0.7rem;
 			max-width: none;
 		}
+
+		.map_legend {
+			left: 0.7rem;
+			bottom: 5.5rem;
+		}
 	}
 
 	:global(.maplibregl-ctrl-attrib) {
 		font-size: 10px;
 		background: oklch(1 0 0 / 0.84);
+	}
+
+	:global(.maplibregl-popup-content) {
+		border-radius: 12px !important;
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18) !important;
+		padding: 14px 16px !important;
+		font-family: system-ui, sans-serif;
+		min-width: 200px;
+	}
+
+	:global(.maplibregl-popup-close-button) {
+		font-size: 1rem;
+		padding: 4px 8px;
+		color: #94a3b8;
+	}
+
+	:global(.maplibregl-popup-tip) {
+		border-top-color: #fff !important;
 	}
 </style>

@@ -8,6 +8,9 @@ export default defineConfig({
 		sveltekit(),
 		paraglideVitePlugin({ project: './project.inlang', outdir: './src/lib/paraglide' })
 	],
+	server: {
+		allowedHosts: ['testlink.sh8.no']
+	},
 	test: {
 		expect: { requireAssertions: true },
 		projects: [

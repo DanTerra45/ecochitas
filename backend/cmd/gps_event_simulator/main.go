@@ -124,10 +124,25 @@ func build_interpolated_path(route_waypoints []waypoint, steps_per_segment int) 
 		return route_waypoints
 	}
 
-	interpolated_path := make([]waypoint, 0, len(route_waypoints)*steps_per_segment)
-	for waypoint_index := 0; waypoint_index < len(route_waypoints)-1; waypoint_index++ {
-		segment_start := route_waypoints[waypoint_index]
-		segment_end := route_waypoints[waypoint_index+1]
+	// Match the frontend's "manhattan" mock: between every pair of stops
+	// insert an L-shaped elbow, alternating which axis we travel first.
+	manhattan_waypoints := []waypoint{route_waypoints[0]}
+	for segment_index := 0; segment_index < len(route_waypoints)-1; segment_index++ {
+		segment_start := route_waypoints[segment_index]
+		segment_end := route_waypoints[segment_index+1]
+		var elbow_point waypoint
+		if segment_index%2 == 0 {
+			elbow_point = waypoint{latitude: segment_start.latitude, longitude: segment_end.longitude}
+		} else {
+			elbow_point = waypoint{latitude: segment_end.latitude, longitude: segment_start.longitude}
+		}
+		manhattan_waypoints = append(manhattan_waypoints, elbow_point, segment_end)
+	}
+
+	interpolated_path := make([]waypoint, 0, len(manhattan_waypoints)*steps_per_segment)
+	for waypoint_index := 0; waypoint_index < len(manhattan_waypoints)-1; waypoint_index++ {
+		segment_start := manhattan_waypoints[waypoint_index]
+		segment_end := manhattan_waypoints[waypoint_index+1]
 		for step_index := 0; step_index < steps_per_segment; step_index++ {
 			progress_fraction := float64(step_index) / float64(steps_per_segment)
 			interpolated_path = append(interpolated_path, waypoint{
@@ -136,7 +151,7 @@ func build_interpolated_path(route_waypoints []waypoint, steps_per_segment int) 
 			})
 		}
 	}
-	interpolated_path = append(interpolated_path, route_waypoints[len(route_waypoints)-1])
+	interpolated_path = append(interpolated_path, manhattan_waypoints[len(manhattan_waypoints)-1])
 	return interpolated_path
 }
 

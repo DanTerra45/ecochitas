@@ -179,6 +179,7 @@
 	let map_resize_observer: ResizeObserver | null = null;
 	let truck_stream_connection: EventSource | null = null;
 	let map_popup_instance: import('maplibre-gl').Popup | null = null;
+	let active_truck_popup_identifier: string | null = null;
 	let has_registered_layer_interactions = false;
 	let latest_positions_by_truck_identifier = new SvelteMap<string, Truck_latest_position>();
 	let theme_observer: MutationObserver | null = null;
@@ -513,6 +514,22 @@
 		truck_positions_source.setData(
 			build_truck_feature_collection() as unknown as GeoJSON.FeatureCollection
 		);
+
+		update_active_truck_popup_position();
+	}
+
+	function update_active_truck_popup_position() {
+		if (!map_popup_instance || !active_truck_popup_identifier) {
+			return;
+		}
+		const latest_truck_position = latest_positions_by_truck_identifier.get(
+			active_truck_popup_identifier
+		);
+		if (!latest_truck_position) {
+			return;
+		}
+		map_popup_instance.setLngLat([latest_truck_position.longitude, latest_truck_position.latitude]);
+		map_popup_instance.setHTML(build_truck_marker_popup_html(latest_truck_position));
 	}
 
 	function sync_collection_route_source_data() {
@@ -561,9 +578,21 @@
 			if (!clicked_feature || !map_instance || !maplibre_library) return;
 			if (clicked_feature.geometry.type !== 'Point') return;
 
-			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
-			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html);
+			const clicked_truck_identifier = String(
+				clicked_feature.properties?.['truck_identifier'] ?? ''
+			);
+			const latest_truck_position = clicked_truck_identifier
+				? latest_positions_by_truck_identifier.get(clicked_truck_identifier)
+				: undefined;
+
+			const popup_coordinates: [number, number] = latest_truck_position
+				? [latest_truck_position.longitude, latest_truck_position.latitude]
+				: (clicked_feature.geometry.coordinates as [number, number]);
+			const popup_html = latest_truck_position
+				? build_truck_marker_popup_html(latest_truck_position)
+				: String(clicked_feature.properties?.['popup_html'] ?? '');
+
+			open_popup(popup_coordinates, popup_html, clicked_truck_identifier || null);
 		});
 
 		map_instance.on('mouseenter', collection_routes_line_layer_identifier, () => {
@@ -583,7 +612,7 @@
 
 			const clicked_coordinates = layer_mouse_event.lngLat.toArray() as [number, number];
 			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html);
+			open_popup(clicked_coordinates, popup_html, null);
 		});
 
 		map_instance.on('mouseenter', collection_route_stops_circle_layer_identifier, () => {
@@ -603,14 +632,20 @@
 
 			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
 			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html);
+			open_popup(clicked_coordinates, popup_html, null);
 		});
 	}
 
-	function open_popup(clicked_coordinates: [number, number], popup_html: string) {
+	function open_popup(
+		clicked_coordinates: [number, number],
+		popup_html: string,
+		associated_truck_identifier: string | null
+	) {
 		if (!map_instance || !maplibre_library) return;
 
 		map_popup_instance?.remove();
+		active_truck_popup_identifier = associated_truck_identifier;
+
 		map_popup_instance = new maplibre_library.Popup({
 			closeButton: true,
 			closeOnClick: true,
@@ -619,6 +654,11 @@
 			.setLngLat(clicked_coordinates)
 			.setHTML(popup_html)
 			.addTo(map_instance);
+
+		map_popup_instance.on('close', () => {
+			active_truck_popup_identifier = null;
+			map_popup_instance = null;
+		});
 	}
 
 	function build_truck_feature_collection(): Truck_feature_collection {
@@ -657,10 +697,12 @@
 				type: 'Feature',
 				geometry: {
 					type: 'LineString',
-					coordinates: sorted_coordinates.map((route_coordinate) => [
-						route_coordinate.longitude,
-						route_coordinate.latitude
-					])
+					coordinates: build_manhattan_line_coordinates(
+						sorted_coordinates.map((route_coordinate) => [
+							route_coordinate.longitude,
+							route_coordinate.latitude
+						])
+					)
 				},
 				properties: {
 					route_identifier: collection_route_item.route_identifier,
@@ -712,6 +754,35 @@
 			type: 'FeatureCollection',
 			features: stop_feature_list
 		};
+	}
+
+	function build_manhattan_line_coordinates(
+		stop_coordinates: [number, number][]
+	): [number, number][] {
+		// Demo-only mock of street-following routing: insert one L-shaped
+		// elbow between each pair of consecutive stops, alternating which
+		// axis (longitude or latitude) we move along first so the polyline
+		// looks like it follows the city block grid.
+		if (stop_coordinates.length < 2) {
+			return stop_coordinates;
+		}
+
+		const manhattan_coordinates: [number, number][] = [stop_coordinates[0]];
+		for (
+			let segment_index = 0;
+			segment_index < stop_coordinates.length - 1;
+			segment_index += 1
+		) {
+			const segment_start = stop_coordinates[segment_index];
+			const segment_end = stop_coordinates[segment_index + 1];
+			const elbow_coordinate: [number, number] =
+				segment_index % 2 === 0
+					? [segment_end[0], segment_start[1]]
+					: [segment_start[0], segment_end[1]];
+			manhattan_coordinates.push(elbow_coordinate);
+			manhattan_coordinates.push(segment_end);
+		}
+		return manhattan_coordinates;
 	}
 
 	function resolve_route_line_color(route_identifier: string): string {

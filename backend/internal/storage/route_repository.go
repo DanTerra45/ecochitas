@@ -267,6 +267,163 @@ func (route_repository *Route_repository) Create_collection_route(
 	)
 }
 
+func (route_repository *Route_repository) Create_demo_route(
+	application_context context.Context,
+	demo_route_create_command domain.Demo_route_create_command,
+) (*domain.Collection_route_view, error) {
+	normalized_route_code := strings.TrimSpace(demo_route_create_command.Route_code)
+	normalized_route_name := strings.TrimSpace(demo_route_create_command.Route_name)
+	normalized_zone_name := strings.TrimSpace(demo_route_create_command.Zone_name)
+
+	if normalized_route_code == "" {
+		return nil, fmt.Errorf("route_code_is_required")
+	}
+	if normalized_route_name == "" {
+		return nil, fmt.Errorf("route_name_is_required")
+	}
+	if normalized_zone_name == "" {
+		return nil, fmt.Errorf("zone_name_is_required")
+	}
+	if demo_route_create_command.Collection_weekday < 1 || demo_route_create_command.Collection_weekday > 7 {
+		return nil, fmt.Errorf("collection_weekday_out_of_range")
+	}
+
+	transaction_handler, begin_transaction_error := route_repository.postgres_pool.BeginTx(
+		application_context,
+		pgx.TxOptions{},
+	)
+	if begin_transaction_error != nil {
+		return nil, fmt.Errorf("failed_to_begin_create_demo_route_transaction: %w", begin_transaction_error)
+	}
+	defer func() {
+		_ = transaction_handler.Rollback(application_context)
+	}()
+
+	create_collection_route_statement := `
+		INSERT INTO collection_routes (
+			route_code,
+			route_name,
+			zone_name,
+			collection_weekday,
+			is_active
+		) VALUES (
+			$1,
+			$2,
+			$3,
+			$4,
+			$5
+		)
+		RETURNING id::text;
+	`
+
+	var created_route_identifier string
+	create_collection_route_error := transaction_handler.QueryRow(
+		application_context,
+		create_collection_route_statement,
+		normalized_route_code,
+		normalized_route_name,
+		normalized_zone_name,
+		demo_route_create_command.Collection_weekday,
+		demo_route_create_command.Is_active,
+	).Scan(&created_route_identifier)
+	if create_collection_route_error != nil {
+		if is_unique_constraint_error(create_collection_route_error, "collection_routes_route_code_key") {
+			return nil, fmt.Errorf("route_code_already_exists")
+		}
+		return nil, fmt.Errorf("failed_to_create_collection_route: %w", create_collection_route_error)
+	}
+
+	var raw_road_path_coordinates []byte
+	routing_status := routing_status_not_required
+	routing_provider := ""
+
+	if len(demo_route_create_command.Points) >= 2 {
+		route_path_coordinate_list := make([]domain.Route_path_coordinate, len(demo_route_create_command.Points))
+		for i, point := range demo_route_create_command.Points {
+			route_path_coordinate_list[i] = domain.Route_path_coordinate{
+				Stop_order: i + 1,
+				Latitude:   point.Latitude,
+				Longitude:  point.Longitude,
+			}
+		}
+
+		road_path_coordinate_list, osrm_error := route_repository.route_path_router.calculate_road_path_coordinates(
+			application_context,
+			route_path_coordinate_list,
+		)
+
+		if osrm_error == nil && len(road_path_coordinate_list) > 0 {
+			marshaled_path, err := json.Marshal(road_path_coordinate_list)
+			if err == nil {
+				raw_road_path_coordinates = marshaled_path
+				routing_status = routing_status_routed
+				routing_provider = routing_provider_osrm
+			}
+		} else {
+			// Fallback straight lines
+			straight_line_path := build_straight_line_road_path_coordinates(route_path_coordinate_list)
+			marshaled_path, _ := json.Marshal(straight_line_path)
+			raw_road_path_coordinates = marshaled_path
+			routing_status = routing_status_fallback_straight_line
+		}
+	}
+
+	if len(raw_road_path_coordinates) > 0 {
+		update_path_statement := `
+			UPDATE collection_routes
+			SET
+				road_path_coordinates = $2::jsonb,
+				routing_status = $3,
+				routing_provider = $4,
+				routed_at = NOW()
+			WHERE id = $1::uuid;
+		`
+		_, update_path_error := transaction_handler.Exec(
+			application_context,
+			update_path_statement,
+			created_route_identifier,
+			raw_road_path_coordinates,
+			routing_status,
+			routing_provider,
+		)
+		if update_path_error != nil {
+			return nil, fmt.Errorf("failed_to_update_demo_route_path: %w", update_path_error)
+		}
+	}
+
+	route_change_payload := map[string]any{
+		"route_code":         normalized_route_code,
+		"route_name":         normalized_route_name,
+		"zone_name":          normalized_zone_name,
+		"collection_weekday": demo_route_create_command.Collection_weekday,
+		"is_active":          demo_route_create_command.Is_active,
+		"route_identifier":   created_route_identifier,
+		"action_description": "demo_route_created",
+	}
+	insert_revision_error := insert_collection_route_revision(
+		application_context,
+		transaction_handler,
+		created_route_identifier,
+		route_revision_change_type_created,
+		strings.TrimSpace(demo_route_create_command.Authenticated_user_identifier),
+		route_change_payload,
+	)
+	if insert_revision_error != nil {
+		return nil, insert_revision_error
+	}
+
+	commit_transaction_error := transaction_handler.Commit(application_context)
+	if commit_transaction_error != nil {
+		return nil, fmt.Errorf("failed_to_commit_create_demo_route_transaction: %w", commit_transaction_error)
+	}
+
+	return load_collection_route_view_by_identifier(
+		application_context,
+		route_repository.postgres_pool,
+		created_route_identifier,
+	)
+}
+
 func (route_repository *Route_repository) Update_collection_route(
 	application_context context.Context,
 	collection_route_update_command domain.Collection_route_update_command,

@@ -15,6 +15,10 @@ type route_service interface {
 		application_context context.Context,
 		collection_route_create_command domain.Collection_route_create_command,
 	) (*domain.Collection_route_view, error)
+	Create_demo_route(
+		application_context context.Context,
+		demo_route_create_command domain.Demo_route_create_command,
+	) (*domain.Collection_route_view, error)
 	Update_collection_route(
 		application_context context.Context,
 		collection_route_update_command domain.Collection_route_update_command,

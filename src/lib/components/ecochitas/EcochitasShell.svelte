@@ -110,17 +110,20 @@
 	<div class="app_shell">
 		<header class="top_header">
 			<div class="brand_group">
-				<div class="brand_icon" aria-hidden="true">
-					<img src={ecochitas_favicon_asset} alt="" class="brand_logo_image" />
-				</div>
-				<div>
-					<p class="eyebrow_text">EcoChitas · Cochabamba</p>
+				<a href={resolve('/')} class="brand_home_link" aria-label="Ir al inicio de Ecochitas">
+					<span class="brand_icon" aria-hidden="true">
+						<img src={ecochitas_favicon_asset} alt="" class="brand_logo_image" />
+					</span>
+					<span class="brand_home_text">Ecochitas</span>
+				</a>
+				<div class="brand_route_meta">
+					<p class="eyebrow_text">Ecochitas · Cochabamba</p>
 					<h1>{current_route_label}</h1>
 				</div>
 			</div>
 
 			<div class="nav_and_actions">
-				<nav class="desktop_nav" aria-label="Secciones de EcoChitas">
+				<nav class="desktop_nav" aria-label="Secciones de Ecochitas">
 					{#each navigation_items as navigation_item (navigation_item.href)}
 						<a
 							href={resolve(navigation_item.href)}
@@ -278,6 +281,7 @@
 		padding: 0;
 		background-color: var(--ecochitas-background, #000000);
 		color: var(--ecochitas-ink, #ffffff);
+		scrollbar-gutter: stable;
 		transition:
 			background-color 0.3s ease,
 			color 0.3s ease;
@@ -372,6 +376,20 @@
 		min-width: 0;
 	}
 
+	.brand_home_link {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.7rem;
+		text-decoration: none;
+		color: inherit;
+		border-radius: 0.8rem;
+	}
+
+	.brand_home_link:focus-visible {
+		outline: 2px solid var(--ecochitas-leaf);
+		outline-offset: 2px;
+	}
+
 	.brand_icon {
 		width: 2.2rem;
 		height: 2.2rem;
@@ -386,6 +404,10 @@
 		height: 1.55rem;
 		display: block;
 		object-fit: contain;
+	}
+
+	.brand_home_text {
+		display: none;
 	}
 
 	.eyebrow_text {
@@ -696,8 +718,8 @@
 			display: none;
 		}
 
-		.brand_group::after {
-			content: 'EcoChitas';
+		.brand_home_text {
+			display: inline;
 			font-family: 'Sora', sans-serif;
 			font-weight: 700;
 			font-size: 1.2rem;

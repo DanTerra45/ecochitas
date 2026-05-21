@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import type { PageData } from '../../../../routes/(authenticated)/$types';
 	import {
 		MapLibre,
 		RasterTileSource,
@@ -10,6 +11,8 @@
 		Marker,
 		Popup
 	} from 'svelte-maplibre-gl';
+	import SimulatorControlPanel from '$lib/components/SimulatorControlPanel.svelte';
+	import AppModal from './AppModal.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import type * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
@@ -190,6 +193,29 @@
 		duration_milliseconds: number;
 	};
 
+	type Simulator_status = 'idle' | 'running' | 'paused';
+
+	type Simulator_payload = {
+		routeId: string;
+		zone: string;
+		truckCount: number;
+		speedMultiplier: number;
+		updateIntervalMs: number;
+		snapToRoute: boolean;
+	};
+
+	type Simulator_route_option = {
+		value: string;
+		label: string;
+	};
+
+	type Simulator_truck_runtime_state = {
+		truck_identifier: string;
+		route_coordinates: [number, number][];
+		cursor: number;
+		speed_kmh: number;
+	};
+
 	const cochabamba_center_latitude = -17.3935;
 	const cochabamba_center_longitude = -66.157;
 	const default_backend_api_base_url = 'http://127.0.0.1:8080';
@@ -212,6 +238,13 @@
 	const truck_motion_min_duration_milliseconds = 240;
 	const truck_motion_max_duration_milliseconds = 1400;
 	const truck_motion_milliseconds_per_meter = 12;
+	const stream_reconnect_base_delay_milliseconds = 2000;
+	const stream_reconnect_max_delay_milliseconds = 30000;
+	const stream_reconnect_jitter_ratio = 0.2;
+	const stream_status_message_cooldown_milliseconds = 5000;
+	const backend_health_poll_interval_milliseconds = 15000;
+	const backend_data_refresh_interval_milliseconds = 30000;
+	const backend_health_request_timeout_milliseconds = 3500;
 	const meters_per_degree_latitude = 110540;
 	const route_line_color_palette = [
 		'#16a34a',
@@ -223,6 +256,8 @@
 		'#2563eb',
 		'#e11d48'
 	];
+	const simulated_truck_identifier_prefix = 'SIM-';
+	const simulation_backend_start_endpoint_path = '/v1/admin/simulations/trucks/start';
 
 	const mock_smart_bins: SmartBin[] = [
 		{
@@ -402,7 +437,56 @@
 	let truck_stream_connection: EventSource | null = null;
 	let should_keep_stream_connected = false;
 	let stream_reconnect_timeout_identifier: number | null = null;
+	let stream_reconnect_attempt_count = 0;
+	let stream_last_status_message_at_milliseconds = 0;
+	let backend_health_poll_interval_identifier: number | null = null;
+	let backend_data_refresh_interval_identifier: number | null = null;
 	let active_map_popup_state = $state<Active_map_popup_state | null>(null);
+	let is_simulator_panel_open = $state(false);
+	let simulation_status = $state<Simulator_status>('idle');
+	let simulation_active_trucks = $state(0);
+	let simulation_messages_sent = $state(0);
+	let simulation_route_id = $state('route-1');
+	let simulation_zone = $state('north-zone');
+	let simulation_truck_count = $state(5);
+	let simulation_speed_multiplier = $state(1);
+	let simulation_update_interval_milliseconds = $state(1000);
+	let simulation_snap_to_route = $state(true);
+	let simulation_loop_interval_identifier: number | null = null;
+	let simulation_runtime_by_truck_identifier = new Map<string, Simulator_truck_runtime_state>();
+	let simulated_truck_identifiers = new Set<string>();
+	let simulation_backend_control_enabled = $state<null | boolean>(null);
+	let simulation_last_message = $state('Local simulator is ready.');
+	let backend_connection_status = $state<'unknown' | 'online' | 'offline'>('unknown');
+	let backend_last_health_check_iso_timestamp = $state<string | null>(null);
+	let backend_last_data_sync_iso_timestamp = $state<string | null>(null);
+	let is_manual_reconnect_in_progress = $state(false);
+
+	// --- UI Panel States ---
+	let is_legend_open = $state(false);
+	let is_status_open = $state(false);
+
+	// --- Global Modal States ---
+	let global_modal_open = $state(false);
+	let global_modal_title = $state('');
+	let global_modal_message = $state('');
+	let global_modal_type = $state<'success' | 'error' | 'info'>('info');
+
+	function show_modal(title: string, message: string, type: 'success' | 'error' | 'info' = 'info') {
+		global_modal_title = title;
+		global_modal_message = message;
+		global_modal_type = type;
+		global_modal_open = true;
+	}
+
+	// --- Route Builder States ---
+	let is_route_builder_active = $state(false);
+	let route_builder_selected_points = $state<{ id: string; lng: number; lat: number }[]>([]);
+	let route_builder_route_code = $state('');
+	let route_builder_route_name = $state('');
+	let route_builder_zone = $state('Zona Norte');
+	let route_builder_weekday = $state(1);
+	let is_saving_route = $state(false);
 
 	let latest_positions_by_truck_identifier = new SvelteMap<string, Truck_latest_position>();
 	let latest_snap_state_by_truck_identifier = new SvelteMap<string, Truck_route_snap_state>();
@@ -434,6 +518,55 @@
 	let theme_observer: MutationObserver | null = null;
 
 	const base_tile_url = $derived(get_base_tile_url(is_dark_map_theme));
+	const simulation_route_options = $derived.by(() => {
+		if (collection_routes_list.length === 0) {
+			return [
+				{ value: 'route-1', label: 'Route 1 (Downtown)' },
+				{ value: 'route-2', label: 'Route 2 (Suburbs)' },
+				{ value: 'route-3', label: 'Route 3 (Highway)' }
+			] satisfies Simulator_route_option[];
+		}
+
+		return collection_routes_list.map((collection_route_item) => ({
+			value: collection_route_item.route_identifier,
+			label: `${collection_route_item.route_code} · ${collection_route_item.route_name}`
+		}));
+	});
+	const simulation_zone_options = $derived.by(() => {
+		if (collection_routes_list.length === 0) {
+			return [
+				{ value: 'north-zone', label: 'North Zone' },
+				{ value: 'south-zone', label: 'South Zone' },
+				{ value: 'east-zone', label: 'East Zone' },
+				{ value: 'west-zone', label: 'West Zone' }
+			] satisfies Simulator_route_option[];
+		}
+
+		const unique_zone_name_set = new Set<string>();
+		for (const collection_route_item of collection_routes_list) {
+			if (collection_route_item.zone_name.trim().length > 0) {
+				unique_zone_name_set.add(collection_route_item.zone_name);
+			}
+		}
+
+		return Array.from(unique_zone_name_set).map((zone_name) => ({
+			value: zone_name,
+			label: zone_name
+		}));
+	});
+	const backend_connection_status_label = $derived(
+		backend_connection_status === 'online'
+			? 'online'
+			: backend_connection_status === 'offline'
+				? 'offline'
+				: 'checking'
+	);
+	const backend_last_health_check_label = $derived(
+		format_status_time_label(backend_last_health_check_iso_timestamp)
+	);
+	const backend_last_data_sync_label = $derived(
+		format_status_time_label(backend_last_data_sync_iso_timestamp)
+	);
 
 	onMount(async () => {
 		resolve_backend_api_base_url();
@@ -441,17 +574,42 @@
 			typeof document !== 'undefined' && document.documentElement.dataset.theme === 'dark';
 		setup_theme_observer();
 		recompute_static_feature_collections();
-		await Promise.all([load_latest_positions_snapshot(), load_collection_routes_snapshot()]);
+		await refresh_backend_snapshots({ quiet: true });
 		should_keep_stream_connected = true;
 		connect_truck_stream();
+		start_backend_live_refresh_loops();
+		void check_backend_health({ quiet: true });
 	});
 
 	onDestroy(() => {
 		should_keep_stream_connected = false;
+		stop_local_simulation_loop();
+		clear_simulated_trucks_from_map();
 		stop_truck_motion_loop();
 		clear_stream_reconnect_timeout();
+		stop_backend_live_refresh_loops();
 		disconnect_truck_stream();
 		theme_observer?.disconnect();
+	});
+
+	$effect(() => {
+		if (simulation_route_options.length === 0) return;
+		const has_selected_route = simulation_route_options.some(
+			(route_option_item) => route_option_item.value === simulation_route_id
+		);
+		if (!has_selected_route) {
+			simulation_route_id = simulation_route_options[0]!.value;
+		}
+	});
+
+	$effect(() => {
+		if (simulation_zone_options.length === 0) return;
+		const has_selected_zone = simulation_zone_options.some(
+			(zone_option_item) => zone_option_item.value === simulation_zone
+		);
+		if (!has_selected_zone) {
+			simulation_zone = simulation_zone_options[0]!.value;
+		}
 	});
 
 	function resolve_backend_api_base_url() {
@@ -506,6 +664,482 @@
 		theme_observer.observe(document.documentElement, { attributes: true });
 	}
 
+	function format_status_time_label(raw_iso_timestamp: string | null): string {
+		if (!raw_iso_timestamp) {
+			return 'n/a';
+		}
+		const parsed_unix_timestamp = Date.parse(raw_iso_timestamp);
+		if (Number.isNaN(parsed_unix_timestamp)) {
+			return 'n/a';
+		}
+		return new Date(parsed_unix_timestamp).toLocaleTimeString();
+	}
+
+	function set_backend_connection_status(
+		next_status: 'unknown' | 'online' | 'offline',
+		options: { quiet?: boolean } = {}
+	) {
+		const previous_status = backend_connection_status;
+		backend_connection_status = next_status;
+		if (options.quiet || previous_status === next_status) {
+			return;
+		}
+
+		if (next_status === 'online') {
+			maybe_set_stream_status_message('Backend is online.');
+			return;
+		}
+
+		if (next_status === 'offline') {
+			maybe_set_stream_status_message('Backend is offline.');
+		}
+	}
+
+	function build_health_endpoint_url(): string {
+		return `${backend_api_base_url}/healthz`;
+	}
+
+	async function check_backend_health(options: { quiet?: boolean } = {}): Promise<boolean> {
+		if (typeof window === 'undefined') {
+			return false;
+		}
+
+		const abort_controller = new AbortController();
+		const timeout_identifier = window.setTimeout(() => {
+			abort_controller.abort();
+		}, backend_health_request_timeout_milliseconds);
+
+		let is_backend_online = false;
+		try {
+			const health_response = await fetch(build_health_endpoint_url(), {
+				cache: 'no-store',
+				signal: abort_controller.signal
+			});
+			is_backend_online = health_response.ok;
+		} catch {
+			is_backend_online = false;
+		} finally {
+			window.clearTimeout(timeout_identifier);
+			backend_last_health_check_iso_timestamp = new Date().toISOString();
+		}
+
+		set_backend_connection_status(is_backend_online ? 'online' : 'offline', {
+			quiet: options.quiet
+		});
+		return is_backend_online;
+	}
+
+	async function refresh_backend_snapshots(options: { quiet?: boolean } = {}): Promise<boolean> {
+		const [has_latest_positions_snapshot, has_routes_snapshot] = await Promise.all([
+			load_latest_positions_snapshot(),
+			load_collection_routes_snapshot()
+		]);
+		const has_any_snapshot = has_latest_positions_snapshot || has_routes_snapshot;
+		if (has_any_snapshot) {
+			backend_last_data_sync_iso_timestamp = new Date().toISOString();
+		}
+		if (!options.quiet && !has_any_snapshot) {
+			maybe_set_stream_status_message('Snapshot refresh failed.');
+		}
+		return has_any_snapshot;
+	}
+
+	function stop_backend_live_refresh_loops() {
+		if (typeof window === 'undefined') {
+			return;
+		}
+
+		if (backend_health_poll_interval_identifier != null) {
+			window.clearInterval(backend_health_poll_interval_identifier);
+			backend_health_poll_interval_identifier = null;
+		}
+		if (backend_data_refresh_interval_identifier != null) {
+			window.clearInterval(backend_data_refresh_interval_identifier);
+			backend_data_refresh_interval_identifier = null;
+		}
+	}
+
+	function start_backend_live_refresh_loops() {
+		if (typeof window === 'undefined') {
+			return;
+		}
+		stop_backend_live_refresh_loops();
+
+		backend_health_poll_interval_identifier = window.setInterval(() => {
+			void check_backend_health({ quiet: true });
+		}, backend_health_poll_interval_milliseconds);
+
+		backend_data_refresh_interval_identifier = window.setInterval(() => {
+			if (backend_connection_status !== 'online') {
+				return;
+			}
+			void refresh_backend_snapshots({ quiet: true });
+		}, backend_data_refresh_interval_milliseconds);
+	}
+
+	function normalize_simulator_payload(raw_payload: Simulator_payload): Simulator_payload {
+		const normalized_truck_count = Math.max(1, Math.min(20, Math.round(raw_payload.truckCount)));
+		const normalized_speed_multiplier = Math.max(
+			0.25,
+			Math.min(4, Number(raw_payload.speedMultiplier) || 1)
+		);
+		const normalized_update_interval_milliseconds = Math.max(
+			300,
+			Math.min(5000, Math.round(Number(raw_payload.updateIntervalMs) || 1000))
+		);
+		return {
+			routeId: String(raw_payload.routeId || '').trim(),
+			zone: String(raw_payload.zone || '').trim(),
+			truckCount: normalized_truck_count,
+			speedMultiplier: normalized_speed_multiplier,
+			updateIntervalMs: normalized_update_interval_milliseconds,
+			snapToRoute: Boolean(raw_payload.snapToRoute)
+		};
+	}
+
+	function apply_simulator_payload_to_state(normalized_payload: Simulator_payload) {
+		simulation_route_id = normalized_payload.routeId;
+		simulation_zone = normalized_payload.zone;
+		simulation_truck_count = normalized_payload.truckCount;
+		simulation_speed_multiplier = normalized_payload.speedMultiplier;
+		simulation_update_interval_milliseconds = normalized_payload.updateIntervalMs;
+		simulation_snap_to_route = normalized_payload.snapToRoute;
+	}
+
+	function build_fallback_simulation_loop_coordinates(): [number, number][] {
+		const fallback_coordinates: [number, number][] = [];
+		const step_total = 48;
+		for (let step_index = 0; step_index < step_total; step_index += 1) {
+			const angle_radians = (Math.PI * 2 * step_index) / step_total;
+			const latitude_offset = 0.0115 * Math.sin(angle_radians);
+			const longitude_offset = 0.0142 * Math.cos(angle_radians);
+			fallback_coordinates.push([
+				cochabamba_center_longitude + longitude_offset,
+				cochabamba_center_latitude + latitude_offset
+			]);
+		}
+		fallback_coordinates.push(fallback_coordinates[0]!);
+		return fallback_coordinates;
+	}
+
+	function ensure_loop_route_coordinates(
+		route_coordinates: [number, number][]
+	): [number, number][] {
+		if (route_coordinates.length < 2) {
+			return build_fallback_simulation_loop_coordinates();
+		}
+		const first_coordinates = route_coordinates[0]!;
+		const last_coordinates = route_coordinates[route_coordinates.length - 1]!;
+		const is_closed_loop = is_same_coordinates(first_coordinates, last_coordinates);
+		if (is_closed_loop) {
+			return route_coordinates;
+		}
+		return [...route_coordinates, first_coordinates];
+	}
+
+	function resolve_simulation_route_coordinates(
+		normalized_payload: Simulator_payload
+	): [number, number][] {
+		const selected_route_item = collection_routes_list.find(
+			(collection_route_item) =>
+				collection_route_item.route_identifier === normalized_payload.routeId
+		);
+		if (selected_route_item) {
+			return ensure_loop_route_coordinates(
+				resolve_collection_route_line_coordinates(selected_route_item)
+			);
+		}
+
+		const zone_route_item = collection_routes_list.find(
+			(collection_route_item) => collection_route_item.zone_name === normalized_payload.zone
+		);
+		if (zone_route_item) {
+			return ensure_loop_route_coordinates(
+				resolve_collection_route_line_coordinates(zone_route_item)
+			);
+		}
+
+		if (collection_routes_list.length > 0) {
+			return ensure_loop_route_coordinates(
+				resolve_collection_route_line_coordinates(collection_routes_list[0]!)
+			);
+		}
+
+		return build_fallback_simulation_loop_coordinates();
+	}
+
+	function resolve_coordinates_at_cursor(
+		route_coordinates: [number, number][],
+		cursor: number
+	): [number, number] {
+		if (route_coordinates.length === 0) {
+			return [cochabamba_center_longitude, cochabamba_center_latitude];
+		}
+		if (route_coordinates.length === 1) {
+			return route_coordinates[0]!;
+		}
+
+		const segment_total = route_coordinates.length - 1;
+		if (segment_total <= 0) {
+			return route_coordinates[0]!;
+		}
+
+		const normalized_cursor = ((cursor % segment_total) + segment_total) % segment_total;
+		const segment_index = Math.floor(normalized_cursor);
+		const segment_progress = normalized_cursor - segment_index;
+		const segment_start_coordinates = route_coordinates[segment_index]!;
+		const segment_end_coordinates = route_coordinates[segment_index + 1]!;
+		return lerp_coordinates(segment_start_coordinates, segment_end_coordinates, segment_progress);
+	}
+
+	function calculate_heading_degrees_from_coordinates(
+		from_coordinates: [number, number],
+		to_coordinates: [number, number]
+	): number {
+		const delta_longitude = to_coordinates[0] - from_coordinates[0];
+		const delta_latitude = to_coordinates[1] - from_coordinates[1];
+		if (Math.abs(delta_longitude) < 1e-9 && Math.abs(delta_latitude) < 1e-9) {
+			return 0;
+		}
+		const heading_radians = Math.atan2(delta_longitude, delta_latitude);
+		const heading_degrees = (heading_radians * 180) / Math.PI;
+		return (heading_degrees + 360) % 360;
+	}
+
+	function clear_simulated_trucks_from_map() {
+		if (simulated_truck_identifiers.size === 0) {
+			return;
+		}
+
+		for (const simulated_truck_identifier of simulated_truck_identifiers) {
+			latest_positions_by_truck_identifier.delete(simulated_truck_identifier);
+			latest_snap_state_by_truck_identifier.delete(simulated_truck_identifier);
+			rendered_coordinates_by_truck_identifier.delete(simulated_truck_identifier);
+			active_motion_by_truck_identifier.delete(simulated_truck_identifier);
+		}
+		simulation_runtime_by_truck_identifier.clear();
+		simulated_truck_identifiers.clear();
+		sync_positions_list_from_map();
+		recompute_truck_feature_collection({ animate: false });
+	}
+
+	function stop_local_simulation_loop() {
+		if (simulation_loop_interval_identifier == null || typeof window === 'undefined') {
+			simulation_loop_interval_identifier = null;
+			return;
+		}
+		window.clearInterval(simulation_loop_interval_identifier);
+		simulation_loop_interval_identifier = null;
+	}
+
+	function run_local_simulation_tick() {
+		if (simulation_runtime_by_truck_identifier.size === 0) {
+			return;
+		}
+
+		const now_iso_timestamp = new Date().toISOString();
+		const step_segments =
+			Math.max(
+				0.06,
+				0.85 * simulation_speed_multiplier * (simulation_update_interval_milliseconds / 1000)
+			) * (simulation_snap_to_route ? 1 : 1.05);
+
+		for (const simulation_runtime_item of simulation_runtime_by_truck_identifier.values()) {
+			const previous_cursor = simulation_runtime_item.cursor;
+			simulation_runtime_item.cursor += step_segments;
+			const previous_coordinates = resolve_coordinates_at_cursor(
+				simulation_runtime_item.route_coordinates,
+				previous_cursor
+			);
+			const next_coordinates = resolve_coordinates_at_cursor(
+				simulation_runtime_item.route_coordinates,
+				simulation_runtime_item.cursor
+			);
+			const heading_degrees = calculate_heading_degrees_from_coordinates(
+				previous_coordinates,
+				next_coordinates
+			);
+
+			upsert_truck_position(
+				{
+					truck_identifier: simulation_runtime_item.truck_identifier,
+					latitude: next_coordinates[1],
+					longitude: next_coordinates[0],
+					speed_kmh: Math.max(
+						6,
+						simulation_runtime_item.speed_kmh + Math.sin(simulation_runtime_item.cursor) * 1.6
+					),
+					heading_degrees,
+					captured_at: now_iso_timestamp,
+					received_at: now_iso_timestamp
+				},
+				{ defer_sync: true }
+			);
+		}
+
+		sync_positions_list_from_map();
+		recompute_truck_feature_collection({ animate: true });
+		simulation_messages_sent += simulation_runtime_by_truck_identifier.size;
+	}
+
+	function start_local_simulation_loop() {
+		stop_local_simulation_loop();
+		if (typeof window === 'undefined') {
+			return;
+		}
+
+		simulation_loop_interval_identifier = window.setInterval(() => {
+			if (simulation_status !== 'running') {
+				return;
+			}
+			run_local_simulation_tick();
+		}, simulation_update_interval_milliseconds);
+	}
+
+	function start_local_simulation(normalized_payload: Simulator_payload) {
+		apply_simulator_payload_to_state(normalized_payload);
+		stop_local_simulation_loop();
+		clear_simulated_trucks_from_map();
+
+		const resolved_route_coordinates = resolve_simulation_route_coordinates(normalized_payload);
+		const effective_truck_total = Math.max(1, normalized_payload.truckCount);
+		const route_segment_total = Math.max(1, resolved_route_coordinates.length - 1);
+
+		simulation_runtime_by_truck_identifier.clear();
+		simulated_truck_identifiers.clear();
+		for (let truck_index = 0; truck_index < effective_truck_total; truck_index += 1) {
+			const simulated_truck_identifier = `${simulated_truck_identifier_prefix}${String(truck_index + 1).padStart(3, '0')}`;
+			const cursor_offset = (route_segment_total * truck_index) / effective_truck_total;
+			const speed_kmh = 18 + normalized_payload.speedMultiplier * 8 + (truck_index % 3) * 1.5;
+			simulation_runtime_by_truck_identifier.set(simulated_truck_identifier, {
+				truck_identifier: simulated_truck_identifier,
+				route_coordinates: resolved_route_coordinates,
+				cursor: cursor_offset,
+				speed_kmh
+			});
+			simulated_truck_identifiers.add(simulated_truck_identifier);
+		}
+
+		simulation_messages_sent = 0;
+		simulation_active_trucks = simulation_runtime_by_truck_identifier.size;
+		simulation_status = 'running';
+		simulation_last_message = 'Local simulation running.';
+
+		run_local_simulation_tick();
+		start_local_simulation_loop();
+	}
+
+	function pause_local_simulation() {
+		if (simulation_status !== 'running') {
+			return;
+		}
+		stop_local_simulation_loop();
+		simulation_status = 'paused';
+		simulation_last_message = 'Simulation paused.';
+	}
+
+	function resume_local_simulation() {
+		if (simulation_status !== 'paused') {
+			return;
+		}
+		simulation_status = 'running';
+		simulation_last_message = 'Simulation resumed.';
+		start_local_simulation_loop();
+	}
+
+	function stop_local_simulation_and_reset_map() {
+		stop_local_simulation_loop();
+		clear_simulated_trucks_from_map();
+		simulation_status = 'idle';
+		simulation_active_trucks = 0;
+		simulation_messages_sent = 0;
+		simulation_last_message = 'Simulation stopped.';
+	}
+
+	async function try_start_backend_simulation(
+		normalized_payload: Simulator_payload
+	): Promise<boolean> {
+		try {
+			const response = await fetch(
+				`${backend_api_base_url}${simulation_backend_start_endpoint_path}`,
+				{
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify(normalized_payload)
+				}
+			);
+
+			if (!response.ok) {
+				if (response.status === 404 || response.status === 405) {
+					simulation_last_message =
+						'Backend simulation API not available. Running local simulator.';
+					return false;
+				}
+				simulation_last_message = `Backend simulation rejected (${response.status}). Running local simulator.`;
+				return false;
+			}
+
+			simulation_last_message = 'Backend simulation started.';
+			return true;
+		} catch {
+			simulation_last_message = 'Backend simulation unreachable. Running local simulator.';
+			return false;
+		}
+	}
+
+	async function handle_simulation_start(simulation_start_event: CustomEvent<Simulator_payload>) {
+		const normalized_payload = normalize_simulator_payload(simulation_start_event.detail);
+		apply_simulator_payload_to_state(normalized_payload);
+
+		const backend_started = await try_start_backend_simulation(normalized_payload);
+		if (backend_started) {
+			stop_local_simulation_loop();
+			clear_simulated_trucks_from_map();
+			simulation_backend_control_enabled = true;
+			simulation_status = 'running';
+			simulation_active_trucks = normalized_payload.truckCount;
+			return;
+		}
+
+		simulation_backend_control_enabled = false;
+		start_local_simulation(normalized_payload);
+	}
+
+	function handle_simulation_pause() {
+		if (simulation_backend_control_enabled) {
+			simulation_status = 'paused';
+			simulation_last_message = 'Backend simulation paused in UI.';
+			return;
+		}
+		pause_local_simulation();
+	}
+
+	function handle_simulation_resume() {
+		if (simulation_backend_control_enabled) {
+			simulation_status = 'running';
+			simulation_last_message = 'Backend simulation resumed in UI.';
+			return;
+		}
+		resume_local_simulation();
+	}
+
+	function handle_simulation_stop() {
+		stop_local_simulation_and_reset_map();
+		simulation_backend_control_enabled = false;
+	}
+
+	function handle_simulation_change(simulation_change_event: CustomEvent<Simulator_payload>) {
+		const normalized_payload = normalize_simulator_payload(simulation_change_event.detail);
+		apply_simulator_payload_to_state(normalized_payload);
+
+		if (simulation_status === 'running' && !simulation_backend_control_enabled) {
+			start_local_simulation(normalized_payload);
+			simulation_last_message = 'Local simulation settings updated.';
+		}
+	}
+
 	function build_snapshot_endpoint_url(): string {
 		return `${backend_api_base_url}/v1/trucks/latest-positions`;
 	}
@@ -518,30 +1152,34 @@
 		return `${backend_api_base_url}/v1/collection-routes?is_active=true`;
 	}
 
-	async function load_latest_positions_snapshot() {
+	async function load_latest_positions_snapshot(): Promise<boolean> {
 		try {
 			const snapshot_response = await fetch(build_snapshot_endpoint_url());
 			if (!snapshot_response.ok) {
-				return;
+				return false;
 			}
 			const snapshot_payload = (await snapshot_response.json()) as Snapshot_response_payload;
 			replace_positions_from_snapshot(snapshot_payload.items);
+			return true;
 		} catch {
 			// silently ignore — map will populate via stream
+			return false;
 		}
 	}
 
-	async function load_collection_routes_snapshot() {
+	async function load_collection_routes_snapshot(): Promise<boolean> {
 		try {
 			const collection_routes_response = await fetch(build_collection_routes_endpoint_url());
 			if (!collection_routes_response.ok) {
-				return;
+				return false;
 			}
 			const collection_routes_payload =
 				(await collection_routes_response.json()) as Collection_routes_response_payload;
 			replace_routes_from_snapshot(collection_routes_payload.items);
+			return true;
 		} catch {
 			// silently ignore route load errors in PoC mode
+			return false;
 		}
 	}
 
@@ -569,7 +1207,10 @@
 		recompute_truck_feature_collection({ animate: false });
 	}
 
-	function upsert_truck_position(truck_position_item: Truck_latest_position) {
+	function upsert_truck_position(
+		truck_position_item: Truck_latest_position,
+		options: { defer_sync?: boolean } = {}
+	) {
 		const existing_truck_position = latest_positions_by_truck_identifier.get(
 			truck_position_item.truck_identifier
 		);
@@ -584,6 +1225,9 @@
 			truck_position_item.truck_identifier,
 			truck_position_item
 		);
+		if (options.defer_sync) {
+			return;
+		}
 		sync_positions_list_from_map();
 		recompute_truck_feature_collection({ animate: true });
 	}
@@ -895,6 +1539,11 @@
 		if (!clicked_feature || clicked_feature.geometry.type !== 'Point') {
 			return;
 		}
+
+		if (is_route_builder_active) {
+			return; // No mostramos popup normal en modo edición
+		}
+
 		const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
 		const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
 		set_active_popup_state(clicked_coordinates, popup_html, null);
@@ -908,6 +1557,68 @@
 		const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
 		const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
 		set_active_popup_state(clicked_coordinates, popup_html, null);
+	}
+
+	$effect(() => {
+		if (map_instance && is_route_builder_active) {
+			const active_map_instance = map_instance;
+			const click_handler = (e: maplibregl.MapMouseEvent) => {
+				route_builder_selected_points.push({
+					id: `point_${Date.now()}_${Math.random()}`,
+					lng: e.lngLat.lng,
+					lat: e.lngLat.lat
+				});
+			};
+			active_map_instance.on('click', click_handler);
+			return () => {
+				active_map_instance.off('click', click_handler);
+			};
+		}
+	});
+
+	async function save_custom_route() {
+		if (route_builder_selected_points.length < 2) {
+			show_modal('Alerta', 'Haz clic en el mapa para añadir al menos 2 puntos para crear una ruta.', 'info');
+			return;
+		}
+		if (!route_builder_route_code.trim() || !route_builder_route_name.trim()) {
+			show_modal('Alerta', 'Por favor llena el código y nombre de la ruta.', 'info');
+			return;
+		}
+		is_saving_route = true;
+		try {
+			const res_route = await fetch(`${backend_api_base_url}/v1/admin/demo-routes`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					route_code: route_builder_route_code,
+					route_name: route_builder_route_name,
+					zone_name: route_builder_zone,
+					collection_weekday: route_builder_weekday,
+					is_active: true,
+					points: route_builder_selected_points.map((p) => ({
+						longitude: p.lng,
+						latitude: p.lat
+					}))
+				})
+			});
+			if (!res_route.ok) {
+				const errBody = await res_route.text();
+				throw new Error('Error al crear la ruta: ' + errBody);
+			}
+
+			show_modal('Éxito', '¡Ruta creada exitosamente!', 'success');
+			is_route_builder_active = false;
+			route_builder_selected_points = [];
+			route_builder_route_code = '';
+			route_builder_route_name = '';
+			await load_collection_routes_snapshot();
+		} catch (error) {
+			console.error(error);
+			show_modal('Error', error instanceof Error ? error.message : 'Error desconocido', 'error');
+		} finally {
+			is_saving_route = false;
+		}
 	}
 
 	function build_truck_feature_collection(): Truck_feature_collection {
@@ -1011,6 +1722,14 @@
 		truck_position_item: Truck_latest_position,
 		route_line_candidate_list: Route_line_candidate[]
 	): [number, number] | null {
+		const is_simulated_truck = truck_position_item.truck_identifier.startsWith(
+			simulated_truck_identifier_prefix
+		);
+		if (is_simulated_truck && !simulation_snap_to_route) {
+			latest_snap_state_by_truck_identifier.delete(truck_position_item.truck_identifier);
+			return null;
+		}
+
 		if (route_line_candidate_list.length === 0) {
 			latest_snap_state_by_truck_identifier.delete(truck_position_item.truck_identifier);
 			return null;
@@ -1288,13 +2007,17 @@
 		return hash_accumulator;
 	}
 
-	function popup_card(icon: string, title: string, rows: string, cta?: string): string {
+	function popup_icon_svg(path_definition: string): string {
+		return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;display:block"><path d="${path_definition}"/></svg>`;
+	}
+
+	function popup_card(icon_markup: string, title: string, rows: string, cta?: string): string {
 		return `<div style="font-family:system-ui,sans-serif;padding:2px 0">
 			<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-				<span style="font-size:1.15rem">${icon}</span>
-				<strong style="font-size:0.9rem;color:#0f172a">${title}</strong>
+				<span style="display:inline-flex;color:#22c55e">${icon_markup}</span>
+				<strong style="font-size:0.9rem;color:#ffffff">${title}</strong>
 			</div>
-			<div style="display:grid;gap:4px;font-size:0.8rem;color:#475569">${rows}</div>
+			<div style="display:grid;gap:4px;font-size:0.8rem;color:#cbd5e1">${rows}</div>
 			${cta ? `<div style="margin-top:10px">${cta}</div>` : ''}
 		</div>`;
 	}
@@ -1302,7 +2025,7 @@
 	function popup_row(label: string, value: string): string {
 		return `<div style="display:flex;justify-content:space-between;gap:12px">
 			<span style="color:#94a3b8">${label}</span>
-			<span style="font-weight:600;color:#1e293b">${value}</span>
+			<span style="font-weight:600;color:#f8fafc">${value}</span>
 		</div>`;
 	}
 
@@ -1322,7 +2045,13 @@
 			),
 			popup_row('Actualizado', truck_position_item.captured_at)
 		].join('');
-		return popup_card('🚛', 'Carro recolector', rows);
+		return popup_card(
+			popup_icon_svg(
+				'M10 17h4M1 9h14l4 5v3h-2M1 9v8h2M5 17a2 2 0 1 0 0.001 0M17 17a2 2 0 1 0 0.001 0M7 17h8'
+			),
+			'Carro recolector',
+			rows
+		);
 	}
 
 	function build_collection_route_popup_html(collection_route_item: Collection_route_view): string {
@@ -1336,7 +2065,11 @@
 			popup_row('Día de recolección', day_label),
 			popup_row('Paradas', String(collection_route_item.stop_total))
 		].join('');
-		return popup_card('🗺️', collection_route_item.route_name, rows);
+		return popup_card(
+			popup_icon_svg('M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14'),
+			collection_route_item.route_name,
+			rows
+		);
 	}
 
 	function build_collection_route_stop_popup_html(
@@ -1348,37 +2081,52 @@
 			popup_row('Parada', `#${route_stop_coordinate.stop_order}`),
 			popup_row('Contenedor', route_stop_coordinate.bin_code)
 		].join('');
-		return popup_card('📍', `Parada de ruta`, rows);
+		return popup_card(
+			popup_icon_svg(
+				'M12 21s-8-7.5-8-12a8 8 0 0 1 16 0c0 4.5-8 12-8 12zM12 9a2.5 2.5 0 1 0 0.001 0'
+			),
+			`Parada de ruta`,
+			rows
+		);
 	}
 
 	function build_smart_bin_popup_html(bin: SmartBin): string {
 		const cap = bin.capacity_pct;
-		const status_color = cap >= 80 ? '#ef4444' : cap >= 60 ? '#f59e0b' : '#16a34a';
-		const status_bg = cap >= 80 ? '#fef2f2' : cap >= 60 ? '#fffbeb' : '#f0fdf4';
+		const status_color = cap >= 80 ? '#ef4444' : cap >= 60 ? '#f59e0b' : '#22c55e';
+		const status_bg =
+			cap >= 80
+				? 'rgba(239, 68, 68, 0.15)'
+				: cap >= 60
+					? 'rgba(245, 158, 11, 0.15)'
+					: 'rgba(34, 197, 94, 0.15)';
 		const status_label = cap >= 80 ? 'Saturado' : cap >= 60 ? 'Moderado' : 'Disponible';
 		const bar = `<div style="margin:8px 0 4px">
 			<div style="display:flex;justify-content:space-between;font-size:0.72rem;margin-bottom:3px">
 				<span style="color:#94a3b8">Capacidad</span>
 				<span style="font-weight:700;color:${status_color}">${cap}%</span>
 			</div>
-			<div style="height:6px;border-radius:999px;background:#e2e8f0;overflow:hidden">
+			<div style="height:6px;border-radius:999px;background:#262626;overflow:hidden">
 				<div style="height:100%;width:${cap}%;background:${status_color};border-radius:999px"></div>
 			</div>
 		</div>`;
 		const rows = [popup_row('Zona', bin.zone), popup_row('Actualizado', bin.last_updated)].join('');
 		const badge = popup_badge(status_label, status_color, status_bg);
-		return popup_card('🗑️', bin.label, `${badge}${bar}${rows}`);
+		return popup_card(
+			popup_icon_svg('M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v7M14 10v7'),
+			bin.label,
+			`${badge}${bar}${rows}`
+		);
 	}
 
 	function build_acopio_popup_html(pt: AcopioMarker): string {
 		const cap = pt.capacity_pct;
-		const cap_color = cap >= 85 ? '#ef4444' : cap >= 60 ? '#f59e0b' : '#16a34a';
+		const cap_color = cap >= 85 ? '#ef4444' : cap >= 60 ? '#f59e0b' : '#22c55e';
 		const bar = `<div style="margin:8px 0 4px">
 			<div style="display:flex;justify-content:space-between;font-size:0.72rem;margin-bottom:3px">
 				<span style="color:#94a3b8">Capacidad</span>
 				<span style="font-weight:700;color:${cap_color}">${cap}%</span>
 			</div>
-			<div style="height:6px;border-radius:999px;background:#e2e8f0;overflow:hidden">
+			<div style="height:6px;border-radius:999px;background:#262626;overflow:hidden">
 				<div style="height:100%;width:${cap}%;background:${cap_color};border-radius:999px"></div>
 			</div>
 		</div>`;
@@ -1389,12 +2137,21 @@
 			popup_row('Materiales', pt.materials)
 		].join('');
 		const cta = `<a href="/recycling" style="display:block;text-align:center;padding:6px;border-radius:8px;background:#0284c7;color:#fff;font-size:0.78rem;font-weight:600;text-decoration:none">Ver más detalles →</a>`;
-		return popup_card('♻️', pt.name, `${bar}${rows}`, cta);
+		return popup_card(
+			popup_icon_svg(
+				'M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12M14 16l-3 3 3 3M8.293 13.596 7.196 9.5 3.1 10.598M9.344 5.811l1.093-1.892A1.83 1.83 0 0 1 11.985 3a1.784 1.784 0 0 1 1.546.888l3.943 6.843M13.378 9.633l4.096 1.098 1.097-4.096'
+			),
+			pt.name,
+			`${bar}${rows}`,
+			cta
+		);
 	}
 
 	function build_user_popup_html(): string {
 		return popup_card(
-			'📍',
+			popup_icon_svg(
+				'M12 21s-8-7.5-8-12a8 8 0 0 1 16 0c0 4.5-8 12-8 12zM12 9a2.5 2.5 0 1 0 0.001 0'
+			),
 			'Estás aquí',
 			[popup_row('Zona', 'Zona Norte'), popup_row('Acopio más cercano', 'Av. América 2345')].join(
 				''
@@ -1410,6 +2167,18 @@
 		stream_reconnect_timeout_identifier = null;
 	}
 
+	function maybe_set_stream_status_message(next_message: string) {
+		const now_milliseconds = Date.now();
+		if (
+			now_milliseconds - stream_last_status_message_at_milliseconds <
+			stream_status_message_cooldown_milliseconds
+		) {
+			return;
+		}
+		stream_last_status_message_at_milliseconds = now_milliseconds;
+		simulation_last_message = next_message;
+	}
+
 	function schedule_stream_reconnect() {
 		if (!should_keep_stream_connected || typeof window === 'undefined') {
 			return;
@@ -1418,13 +2187,28 @@
 			return;
 		}
 
+		stream_reconnect_attempt_count += 1;
+		const exponential_delay_milliseconds = Math.min(
+			stream_reconnect_max_delay_milliseconds,
+			stream_reconnect_base_delay_milliseconds * 2 ** (stream_reconnect_attempt_count - 1)
+		);
+		const jitter_milliseconds =
+			exponential_delay_milliseconds * stream_reconnect_jitter_ratio * (Math.random() - 0.5) * 2;
+		const reconnect_delay_milliseconds = Math.max(
+			1000,
+			Math.round(exponential_delay_milliseconds + jitter_milliseconds)
+		);
+		maybe_set_stream_status_message(
+			`Backend stream unavailable. Retrying in ${Math.round(reconnect_delay_milliseconds / 1000)}s.`
+		);
+
 		stream_reconnect_timeout_identifier = window.setTimeout(() => {
 			stream_reconnect_timeout_identifier = null;
 			if (!should_keep_stream_connected) {
 				return;
 			}
 			connect_truck_stream();
-		}, 2000);
+		}, reconnect_delay_milliseconds);
 	}
 
 	function disconnect_truck_stream() {
@@ -1442,7 +2226,11 @@
 		truck_stream_connection = stream_connection;
 
 		stream_connection.addEventListener('open', () => {
+			stream_reconnect_attempt_count = 0;
 			clear_stream_reconnect_timeout();
+			set_backend_connection_status('online', { quiet: true });
+			maybe_set_stream_status_message('Backend stream connected.');
+			void refresh_backend_snapshots({ quiet: true });
 		});
 
 		stream_connection.addEventListener('ready', (ready_event) => {
@@ -1476,8 +2264,29 @@
 			}
 			stream_connection.close();
 			truck_stream_connection = null;
+			set_backend_connection_status('offline', { quiet: true });
 			schedule_stream_reconnect();
 		});
+	}
+
+	async function reconnect_backend_stream_now() {
+		if (is_manual_reconnect_in_progress) {
+			return;
+		}
+
+		is_manual_reconnect_in_progress = true;
+		try {
+			clear_stream_reconnect_timeout();
+			stream_reconnect_attempt_count = 0;
+			await check_backend_health({ quiet: true });
+			await refresh_backend_snapshots({ quiet: true });
+			if (should_keep_stream_connected) {
+				connect_truck_stream();
+			}
+			maybe_set_stream_status_message('Manual reconnect requested.');
+		} finally {
+			is_manual_reconnect_in_progress = false;
+		}
 	}
 </script>
 
@@ -1615,6 +2424,43 @@
 		</Popup>
 	</Marker>
 
+	<GeoJSONSource
+		id="route_builder_line_source"
+		data={{
+			type: 'FeatureCollection',
+			features:
+				route_builder_selected_points.length > 1
+					? [
+							{
+								type: 'Feature',
+								geometry: {
+									type: 'LineString',
+									coordinates: route_builder_selected_points.map((b) => [b.lng, b.lat])
+								},
+								properties: {}
+							}
+						]
+					: []
+		}}
+	>
+		<LineLayer
+			id="route_builder_line_layer"
+			paint={{
+				'line-color': '#22c55e',
+				'line-width': 4,
+				'line-dasharray': [2, 2]
+			}}
+		/>
+	</GeoJSONSource>
+
+	{#if is_route_builder_active}
+		{#each route_builder_selected_points as pt, i}
+			<Marker lnglat={[pt.lng, pt.lat]}>
+				<div class="route_builder_marker_badge">{i + 1}</div>
+			</Marker>
+		{/each}
+	{/if}
+
 	{#if active_map_popup_state}
 		<Popup
 			lnglat={active_map_popup_state.lnglat}
@@ -1630,47 +2476,300 @@
 	{/if}
 </MapLibre>
 
-<div class="map_status_panel">
-	<div>API: {backend_api_base_url}</div>
-	<div>Rutas activas: {collection_routes_list.length}</div>
-	<div>Camiones en vivo: {latest_positions_list.length}</div>
+<div class="map_tools_bar">
+	<button
+		type="button"
+		class="map_tool_btn {is_route_builder_active ? 'map_tool_btn_active' : ''}"
+		onclick={() => {
+			is_route_builder_active = !is_route_builder_active;
+			if (!is_route_builder_active) route_builder_selected_points = [];
+		}}
+		title="Constructor de Ruta Demo"
+	>
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"><path d="M3 12h4l3-9 5 18 3-9h3" /></svg
+		>
+	</button>
+	<button
+		type="button"
+		class="map_tool_btn {is_simulator_panel_open ? 'map_tool_btn_active' : ''}"
+		onclick={() => (is_simulator_panel_open = !is_simulator_panel_open)}
+		title="Panel de Simulador"
+	>
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			><circle cx="12" cy="12" r="10" /><polygon points="10 8 16 12 10 16 10 8" /></svg
+		>
+	</button>
+	<button
+		type="button"
+		class="map_tool_btn {is_status_open ? 'map_tool_btn_active' : ''}"
+		onclick={() => (is_status_open = !is_status_open)}
+		title="Estado de API"
+	>
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg
+		>
+	</button>
+	<button
+		type="button"
+		class="map_tool_btn {is_legend_open ? 'map_tool_btn_active' : ''}"
+		onclick={() => (is_legend_open = !is_legend_open)}
+		title="Leyenda del Mapa"
+	>
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line
+				x1="8"
+				y1="18"
+				x2="21"
+				y2="18"
+			/><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line
+				x1="3"
+				y1="18"
+				x2="3.01"
+				y2="18"
+			/></svg
+		>
+	</button>
 </div>
 
-<div class="map_legend">
-	<p class="legend_title">Leyenda</p>
-	<div class="legend_items">
-		<div class="legend_row">
-			<span class="legend_dot" style="background:#18a26e;border-color:#0a5e4a"></span>
-			<span>Carro recolector</span>
+{#if is_route_builder_active}
+	<div class="route_builder_panel_wrap">
+		<h3 style="margin:0 0 12px 0; font-size:1.1rem; color:#fff">Constructor de Ruta</h3>
+		<p style="margin:0 0 16px 0; font-size:0.85rem; color:#a3a3a3">
+			Haz clic en cualquier punto del mapa para trazar tu ruta. Puntos actuales: {route_builder_selected_points.length}
+		</p>
+
+		<div style="display:flex; flex-direction:column; gap:12px; margin-bottom: 16px;">
+			<input
+				type="text"
+				placeholder="Código (ej. D-01)"
+				bind:value={route_builder_route_code}
+				class="builder_input"
+			/>
+			<input
+				type="text"
+				placeholder="Nombre (ej. Demo Ruta Libre)"
+				bind:value={route_builder_route_name}
+				class="builder_input"
+			/>
+			<select bind:value={route_builder_zone} class="builder_input">
+				<option value="Zona Norte">Zona Norte</option>
+				<option value="Zona Sur">Zona Sur</option>
+				<option value="Zona Central">Zona Central</option>
+				<option value="Zona Este">Zona Este</option>
+				<option value="Zona Oeste">Zona Oeste</option>
+			</select>
+			<select bind:value={route_builder_weekday} class="builder_input">
+				<option value={1}>Lunes</option>
+				<option value={2}>Martes</option>
+				<option value={3}>Miércoles</option>
+				<option value={4}>Jueves</option>
+				<option value={5}>Viernes</option>
+				<option value={6}>Sábado</option>
+				<option value={0}>Domingo</option>
+			</select>
 		</div>
-		<div class="legend_row">
-			<span class="legend_dot" style="background:#16a34a;border-color:#14532d"></span>
-			<span>Contenedor OK</span>
+
+		<button
+			class="simulator_toggle_btn save_route_btn"
+			onclick={save_custom_route}
+			disabled={is_saving_route}
+		>
+			{is_saving_route ? 'Guardando...' : 'Guardar Ruta'}
+		</button>
+	</div>
+{/if}
+
+{#if is_simulator_panel_open}
+	<div id="simulator-panel" class="simulator_panel_wrap">
+		<SimulatorControlPanel
+			bind:routeId={simulation_route_id}
+			bind:zone={simulation_zone}
+			bind:truckCount={simulation_truck_count}
+			bind:speedMultiplier={simulation_speed_multiplier}
+			bind:updateIntervalMs={simulation_update_interval_milliseconds}
+			bind:snapToRoute={simulation_snap_to_route}
+			routeOptions={simulation_route_options}
+			zoneOptions={simulation_zone_options}
+			status={simulation_status}
+			activeTrucks={simulation_active_trucks}
+			messagesSent={simulation_messages_sent}
+			on:start={handle_simulation_start}
+			on:pause={handle_simulation_pause}
+			on:resume={handle_simulation_resume}
+			on:stop={handle_simulation_stop}
+			on:change={handle_simulation_change}
+		/>
+	</div>
+{/if}
+
+{#if is_status_open}
+	<div class="map_status_panel">
+		<div>API: {backend_api_base_url}</div>
+		<div>
+			Backend:
+			<span
+				class="backend_status_badge"
+				class:backend_status_badge_online={backend_connection_status === 'online'}
+				class:backend_status_badge_offline={backend_connection_status === 'offline'}
+			>
+				{backend_connection_status_label}
+			</span>
 		</div>
-		<div class="legend_row">
-			<span class="legend_dot" style="background:#f59e0b;border-color:#92400e"></span>
-			<span>Contenedor moderado</span>
+		<div>Last health check: {backend_last_health_check_label}</div>
+		<div>Last data sync: {backend_last_data_sync_label}</div>
+		<div>Rutas activas: {collection_routes_list.length}</div>
+		<div>Camiones en vivo: {latest_positions_list.length}</div>
+		<div>
+			Sim: {simulation_status}
+			{#if simulation_backend_control_enabled === true}(backend){:else if simulation_backend_control_enabled === false}
+				(local){/if}
 		</div>
-		<div class="legend_row">
-			<span class="legend_dot" style="background:#ef4444;border-color:#991b1b"></span>
-			<span>Contenedor saturado</span>
-		</div>
-		<div class="legend_row">
-			<span class="legend_dot" style="background:#0284c7;border-color:#075985"></span>
-			<span>Punto de acopio</span>
-		</div>
-		<div class="legend_row">
-			<span class="legend_dot" style="background:#3b82f6;border-color:#fff"></span>
-			<span>Estás aquí</span>
-		</div>
-		<div class="legend_row">
-			<span class="legend_line"></span>
-			<span>Ruta de recolección</span>
+		<div>{simulation_last_message}</div>
+		<button
+			type="button"
+			class="status_reconnect_btn"
+			onclick={reconnect_backend_stream_now}
+			disabled={is_manual_reconnect_in_progress}
+		>
+			{is_manual_reconnect_in_progress ? 'Reconnecting...' : 'Reconnect now'}
+		</button>
+	</div>
+{/if}
+
+{#if is_legend_open}
+	<div class="map_legend">
+		<p class="legend_title">Leyenda</p>
+		<div class="legend_items">
+			<div class="legend_row">
+				<span class="legend_dot" style="background:#18a26e;border-color:#0a5e4a"></span>
+				<span>Carro recolector</span>
+			</div>
+			<div class="legend_row">
+				<span class="legend_dot" style="background:#16a34a;border-color:#14532d"></span>
+				<span>Contenedor OK</span>
+			</div>
+			<div class="legend_row">
+				<span class="legend_dot" style="background:#f59e0b;border-color:#92400e"></span>
+				<span>Contenedor moderado</span>
+			</div>
+			<div class="legend_row">
+				<span class="legend_dot" style="background:#ef4444;border-color:#991b1b"></span>
+				<span>Contenedor saturado</span>
+			</div>
+			<div class="legend_row">
+				<span class="legend_dot" style="background:#0284c7;border-color:#075985"></span>
+				<span>Punto de acopio</span>
+			</div>
+			<div class="legend_row">
+				<span class="legend_dot" style="background:#3b82f6;border-color:#fff"></span>
+				<span>Estás aquí</span>
+			</div>
+			<div class="legend_row">
+				<span class="legend_line"></span>
+				<span>Ruta de recolección</span>
+			</div>
 		</div>
 	</div>
-</div>
+{/if}
+
+<AppModal
+	bind:is_open={global_modal_open}
+	title={global_modal_title}
+	message={global_modal_message}
+	type={global_modal_type}
+/>
 
 <style>
+	.map_tools_bar {
+		position: fixed;
+		left: 1rem;
+		top: 5rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+		z-index: 10;
+		background: #ffffff;
+		padding: 0.6rem;
+		border-radius: 1rem;
+		border: 1px solid var(--ecochitas-border);
+		box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+	}
+	:global([data-theme='dark']) .map_tools_bar {
+		background: rgba(10, 10, 10, 0.85);
+		backdrop-filter: blur(12px);
+		-webkit-backdrop-filter: blur(12px);
+		border-color: #262626;
+		box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+	}
+	@media (max-width: 768px) {
+		.map_tools_bar { display: none; }
+	}
+
+	.map_tool_btn {
+		width: 44px;
+		height: 44px;
+		border-radius: 0.75rem;
+		background: #f3f4f6;
+		border: 1px solid transparent;
+		color: var(--ecochitas-ink);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		transition: all 0.2s ease;
+	}
+	.map_tool_btn:hover {
+		background: #e5e7eb;
+	}
+	:global([data-theme='dark']) .map_tool_btn {
+		background: #171717;
+		border-color: #262626;
+		color: #ffffff;
+	}
+	:global([data-theme='dark']) .map_tool_btn:hover {
+		background: #262626;
+		border-color: #404040;
+		color: #22c55e;
+	}
+
+	.map_tool_btn_active {
+		background: rgba(34, 197, 94, 0.15) !important;
+		border-color: #22c55e !important;
+		color: #22c55e !important;
+		box-shadow: 0 0 15px rgba(34, 197, 94, 0.2);
+	}
+
 	:global(.map_fullscreen) {
 		position: fixed;
 		top: 0;
@@ -1712,6 +2811,82 @@
 		box-shadow: 0 2px 8px rgba(59, 130, 246, 0.6);
 	}
 
+	.route_builder_marker_badge {
+		background: #22c55e;
+		color: #000;
+		font-weight: bold;
+		font-size: 0.8rem;
+		width: 22px;
+		height: 22px;
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border: 2px solid #000;
+		box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+		transform: translate(-50%, -50%);
+	}
+
+	.route_builder_panel_wrap {
+		position: absolute;
+		top: 70px;
+		right: 20px;
+		z-index: 10;
+		width: 320px;
+		background: rgba(10, 10, 10, 0.95);
+		border: 1px solid #262626;
+		border-radius: 12px;
+		padding: 20px;
+		box-shadow: 0 10px 25px rgba(0, 0, 0, 0.8);
+		backdrop-filter: blur(8px);
+	}
+
+	.builder_input {
+		background: #000;
+		border: 1px solid #262626;
+		color: #fff;
+		border-radius: 6px;
+		padding: 8px 12px;
+		font-size: 0.9rem;
+		width: 100%;
+		box-sizing: border-box;
+		outline: none;
+		transition: border-color 0.2s;
+	}
+	.builder_input:focus {
+		border-color: #22c55e;
+	}
+
+	.save_route_btn {
+		width: 100%;
+		justify-content: center;
+		background: #22c55e;
+		border-color: #16a34a;
+		color: #000;
+		transition: all 0.2s;
+	}
+	.save_route_btn:hover:not(:disabled) {
+		background: #16a34a;
+	}
+	.save_route_btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	/* Force pure dark aesthetic on map panels */
+	:global(.maplibregl-popup-content) {
+		background: #0a0a0a !important;
+		color: #fff !important;
+		border: 1px solid #262626;
+		border-radius: 8px;
+	}
+	:global(.maplibregl-popup-anchor-bottom .maplibregl-popup-tip) {
+		border-top-color: #0a0a0a !important;
+	}
+	:global(.maplibregl-popup-anchor-top .maplibregl-popup-tip) {
+		border-bottom-color: #0a0a0a !important;
+	}
+
 	@keyframes eco_pulse {
 		0% {
 			transform: scale(0.6);
@@ -1738,8 +2913,8 @@
 		gap: 0.25rem;
 		padding: 0.65rem 0.8rem;
 		border-radius: 0.75rem;
-		background: oklch(0.2 0 0 / 0.75);
-		border: 1px solid oklch(1 0 0 / 0.2);
+		background: rgba(10, 10, 10, 0.95);
+		border: 1px solid #262626;
 		color: #f8fafc;
 		font-size: 0.75rem;
 		line-height: 1.25;
@@ -1749,9 +2924,69 @@
 		word-break: break-all;
 	}
 
+	.backend_status_badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		margin-left: 0.35rem;
+		padding: 0.08rem 0.42rem;
+		border-radius: 999px;
+		border: 1px solid #525252;
+		background: rgba(115, 115, 115, 0.2);
+		color: #e5e5e5;
+		font-size: 0.68rem;
+		font-weight: 700;
+		text-transform: uppercase;
+	}
+
+	.backend_status_badge_online {
+		border-color: rgba(34, 197, 94, 0.55);
+		background: rgba(34, 197, 94, 0.18);
+		color: #86efac;
+	}
+
+	.backend_status_badge_offline {
+		border-color: rgba(239, 68, 68, 0.55);
+		background: rgba(239, 68, 68, 0.18);
+		color: #fca5a5;
+	}
+
+	.status_reconnect_btn {
+		margin-top: 0.2rem;
+		border: 1px solid #3f3f46;
+		background: #18181b;
+		color: #fafafa;
+		border-radius: 0.55rem;
+		padding: 0.34rem 0.52rem;
+		font-size: 0.7rem;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.status_reconnect_btn:hover:not(:disabled) {
+		border-color: #22c55e;
+		color: #bbf7d0;
+	}
+
+	.status_reconnect_btn:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+
+	.simulator_panel_wrap {
+		position: fixed;
+		left: 5rem;
+		top: 5.2rem;
+		z-index: 45;
+		width: min(430px, calc(100vw - 6rem));
+		max-height: calc(100vh - 6rem);
+		overflow: auto;
+		border-radius: 1rem;
+	}
+
 	.map_legend {
 		position: fixed;
-		left: 1rem;
+		left: 5rem;
 		bottom: 5rem;
 		z-index: 40;
 		padding: 0.75rem 1rem;
@@ -1818,13 +3053,25 @@
 		.map_status_panel {
 			top: 5.4rem;
 			right: 0.7rem;
-			left: 0.7rem;
+			left: 4.5rem;
 			max-width: none;
 		}
 
-		.map_legend {
+		.map_tools_bar {
 			left: 0.7rem;
-			bottom: 5.5rem;
+			top: 5.4rem;
+		}
+
+		.simulator_panel_wrap {
+			left: 4.5rem;
+			right: 0.7rem;
+			top: 5.4rem;
+			width: auto;
+		}
+
+		.map_legend {
+			left: 4.5rem;
+			bottom: 6rem;
 		}
 	}
 

@@ -91,7 +91,7 @@
 				{#if active_accordion === 'about'}
 					<div class="accordion_body">
 						<p>
-							EcoChitas es una iniciativa tecnológica nacida en Cochabamba con la misión de
+							Ecochitas es una iniciativa tecnológica nacida en Cochabamba con la misión de
 							modernizar la gestión de residuos sólidos. Combinamos hardware (sensores IoT y GPS)
 							con software avanzado para brindar herramientas a los operadores municipales y motivar
 							a los ciudadanos a participar activamente en el reciclaje.
@@ -160,7 +160,7 @@
 					><EcochitasIcon name="youtube" size={16} /></a
 				>
 			</div>
-			<p class="copyright">© EcoChitas 2026</p>
+			<p class="copyright">© Ecochitas 2026</p>
 		</div>
 		<div class="footer_right">
 			<div class="footer_nav_column">

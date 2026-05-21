@@ -119,6 +119,64 @@ func (api_handler *Api_handler) handle_create_collection_route(
 	write_json_response(response_writer, http.StatusCreated, created_collection_route)
 }
 
+func (api_handler *Api_handler) handle_create_demo_route(
+	response_writer http.ResponseWriter,
+	request *http.Request,
+) {
+	if api_handler.route_repository == nil {
+		write_json_error(response_writer, http.StatusInternalServerError, "route_repository_not_configured")
+		return
+	}
+
+	// auth_claims removed for demo purposes
+
+	var create_demo_route_payload struct {
+		Route_code         string                    `json:"route_code"`
+		Route_name         string                    `json:"route_name"`
+		Zone_name          string                    `json:"zone_name"`
+		Collection_weekday int                       `json:"collection_weekday"`
+		Is_active          *bool                     `json:"is_active"`
+		Points             []domain.Demo_route_point `json:"points"`
+	}
+	decode_payload_error := json.NewDecoder(request.Body).Decode(&create_demo_route_payload)
+	if decode_payload_error != nil {
+		write_json_error(response_writer, http.StatusBadRequest, "invalid_create_demo_route_payload")
+		return
+	}
+
+	is_active := true
+	if create_demo_route_payload.Is_active != nil {
+		is_active = *create_demo_route_payload.Is_active
+	}
+
+	demo_route_create_command := domain.Demo_route_create_command{
+		Route_code:                    create_demo_route_payload.Route_code,
+		Route_name:                    create_demo_route_payload.Route_name,
+		Zone_name:                     create_demo_route_payload.Zone_name,
+		Collection_weekday:            create_demo_route_payload.Collection_weekday,
+		Is_active:                     is_active,
+		Points:                        create_demo_route_payload.Points,
+		Authenticated_user_identifier: "demo_user",
+	}
+
+	created_collection_route, create_demo_route_error := api_handler.route_repository.Create_demo_route(
+		request.Context(),
+		demo_route_create_command,
+	)
+	if create_demo_route_error != nil {
+		http_status_code, error_message := map_route_error_to_http_response(create_demo_route_error)
+		api_handler.application_logger.Error(
+			"failed_to_create_demo_route",
+			"error",
+			create_demo_route_error,
+		)
+		write_json_error(response_writer, http_status_code, error_message)
+		return
+	}
+
+	write_json_response(response_writer, http.StatusCreated, created_collection_route)
+}
+
 func (api_handler *Api_handler) handle_update_collection_route(
 	response_writer http.ResponseWriter,
 	request *http.Request,

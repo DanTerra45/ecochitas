@@ -4,6 +4,7 @@ backend/pgdata
 data
 logs
 .playwright-mcp
+.antigravitycli
 
 # Output
 .output

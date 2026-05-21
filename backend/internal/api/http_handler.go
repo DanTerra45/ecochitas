@@ -69,6 +69,7 @@ func (api_handler *Api_handler) Register_routes(http_multiplexer *http.ServeMux)
 		[]string{"admin"},
 		api_handler.handle_create_collection_route,
 	))
+	http_multiplexer.HandleFunc("POST /v1/admin/demo-routes", api_handler.handle_create_demo_route)
 	http_multiplexer.HandleFunc("PATCH /v1/admin/collection-routes/{route_identifier}", api_handler.with_required_roles(
 		[]string{"admin"},
 		api_handler.handle_update_collection_route,

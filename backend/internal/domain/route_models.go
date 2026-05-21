@@ -28,6 +28,21 @@ type Collection_route_update_command struct {
 	Authenticated_user_identifier string
 }
 
+type Demo_route_point struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+}
+
+type Demo_route_create_command struct {
+	Route_code                    string
+	Route_name                    string
+	Zone_name                     string
+	Collection_weekday            int
+	Is_active                     bool
+	Points                        []Demo_route_point
+	Authenticated_user_identifier string
+}
+
 type Route_stop_sync_item struct {
 	Bin_identifier string
 	Stop_order     int

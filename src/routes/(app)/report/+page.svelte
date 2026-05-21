@@ -364,6 +364,16 @@
 	h1, h2 { margin: 0; font-family: 'Sora', 'Plus Jakarta Sans', sans-serif; letter-spacing: -0.02em; }
 	p { margin: 0; }
 
+	/* ── Panel (shared section card) ── */
+	.panel {
+		background: var(--ecochitas-surface);
+		border: 1px solid var(--ecochitas-border);
+		border-radius: 1.25rem;
+		padding: 1.25rem 1.15rem;
+		overflow: hidden;
+		margin-bottom: 0.75rem;
+	}
+
 	/* ── Hero ── */
 	.report_hero {
 		background: linear-gradient(145deg, #7f1d1d, #991b1b, #b91c1c);
@@ -467,9 +477,9 @@
 		transition: border-color 0.15s, background 0.15s, color 0.12s;
 		font-family: 'Plus Jakarta Sans', sans-serif;
 	}
-	.inf_btn:hover { border-color: #fca5a5; background: #fff1f2; color: #b91c1c; }
+	.inf_btn:hover { border-color: #fca5a5; background: rgba(239,68,68,0.06); color: #b91c1c; }
 	:root[data-theme='dark'] .inf_btn:hover { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.4); color: #fca5a5; }
-	.inf_btn_active { border-color: #ef4444; background: #fee2e2; color: #b91c1c; }
+	.inf_btn_active { border-color: #ef4444; background: rgba(239,68,68,0.1); color: #b91c1c; }
 	:root[data-theme='dark'] .inf_btn_active { border-color: #ef4444; background: rgba(239,68,68,0.14); color: #fca5a5; }
 
 	/* ── Meta fields ── */
@@ -519,8 +529,8 @@
 	.privacy_notice {
 		display: flex; align-items: flex-start; gap: 0.55rem;
 		padding: 0.72rem 0.9rem; margin-top: 0.75rem;
-		border-radius: 0.85rem; background: #eff6ff;
-		border: 1px solid #bfdbfe; font-size: 0.75rem; color: #1d4ed8; line-height: 1.5;
+		border-radius: 0.85rem; background: rgba(59,130,246,0.08);
+		border: 1px solid rgba(59,130,246,0.2); font-size: 0.75rem; color: #1d4ed8; line-height: 1.5;
 	}
 	:root[data-theme='dark'] .privacy_notice { background: rgba(59,130,246,0.08); border-color: rgba(59,130,246,0.25); color: #93c5fd; }
 	.privacy_notice strong { color: #1e40af; }
@@ -552,20 +562,20 @@
 		padding: 0.22rem 0.6rem; border-radius: 999px;
 		white-space: nowrap; font-family: 'Sora', sans-serif;
 	}
-	.history_status_pendiente { background: #fef9c3; color: #854d0e; border: 1px solid #fde68a; }
+	.history_status_pendiente { background: rgba(234,179,8,0.1); color: #854d0e; border: 1px solid rgba(234,179,8,0.25); }
 	:root[data-theme='dark'] .history_status_pendiente { background: rgba(234,179,8,0.12); color: #fbbf24; border-color: rgba(234,179,8,0.3); }
-	.history_status_en_revision { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+	.history_status_en_revision { background: rgba(59,130,246,0.1); color: #1e40af; border: 1px solid rgba(59,130,246,0.2); }
 	:root[data-theme='dark'] .history_status_en_revision { background: rgba(59,130,246,0.12); color: #93c5fd; border-color: rgba(59,130,246,0.3); }
-	.history_status_verificado { background: #f5f3ff; color: #4c1d95; border: 1px solid #ddd6fe; }
+	.history_status_verificado { background: rgba(124,58,237,0.1); color: #4c1d95; border: 1px solid rgba(124,58,237,0.2); }
 	:root[data-theme='dark'] .history_status_verificado { background: rgba(124,58,237,0.12); color: #c4b5fd; border-color: rgba(124,58,237,0.3); }
-	.history_status_atendido { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+	.history_status_atendido { background: rgba(34,197,94,0.1); color: #166534; border: 1px solid rgba(34,197,94,0.2); }
 	:root[data-theme='dark'] .history_status_atendido { background: rgba(34,197,94,0.12); color: #4ade80; border-color: rgba(34,197,94,0.3); }
 
 	/* ── Cochinitos ── */
-	.cochinitos_panel { border-color: #fecaca; background: color-mix(in srgb, #fff5f5 80%, var(--ecochitas-surface)); }
+	.cochinitos_panel { border-color: rgba(239,68,68,0.15); background: color-mix(in srgb, rgba(239,68,68,0.04) 80%, var(--ecochitas-surface)); }
 	:root[data-theme='dark'] .cochinitos_panel { border-color: rgba(239,68,68,0.22); background: rgba(239,68,68,0.04); }
 	.coch_head_row { display: flex; align-items: flex-start; gap: 0.65rem; }
-	.coch_head_icon { flex-shrink: 0; width: 38px; height: 38px; border-radius: 0.75rem; background: #fee2e2; border: 1.5px solid #fecaca; display: flex; align-items: center; justify-content: center; }
+	.coch_head_icon { flex-shrink: 0; width: 38px; height: 38px; border-radius: 0.75rem; background: rgba(239,68,68,0.08); border: 1.5px solid rgba(239,68,68,0.2); display: flex; align-items: center; justify-content: center; }
 	:root[data-theme='dark'] .coch_head_icon { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.25); }
 	.coch_title { font-size: 1.02rem; font-weight: 800; color: #b91c1c; }
 	:root[data-theme='dark'] .coch_title { color: #fca5a5; }
@@ -573,22 +583,22 @@
 	.coch_info_box {
 		display: flex; align-items: flex-start; gap: 0.5rem;
 		padding: 0.7rem 0.9rem; margin-top: 0.85rem;
-		border-radius: 0.85rem; background: #eff6ff;
-		border: 1px solid #bfdbfe; font-size: 0.74rem; color: #1d4ed8; line-height: 1.5;
+		border-radius: 0.85rem; background: rgba(59,130,246,0.08);
+		border: 1px solid rgba(59,130,246,0.2); font-size: 0.74rem; color: #1d4ed8; line-height: 1.5;
 	}
 	:root[data-theme='dark'] .coch_info_box { background: rgba(59,130,246,0.08); border-color: rgba(59,130,246,0.22); color: #93c5fd; }
 	.coch_warning {
 		display: flex; align-items: flex-start; gap: 0.5rem;
 		padding: 0.68rem 0.9rem; margin-top: 0.55rem;
-		border-radius: 0.85rem; background: #fffbeb;
-		border: 1px solid #fde68a; font-size: 0.74rem; color: #92400e; line-height: 1.5;
+		border-radius: 0.85rem; background: rgba(245,158,11,0.08);
+		border: 1px solid rgba(245,158,11,0.2); font-size: 0.74rem; color: #92400e; line-height: 1.5;
 	}
 	:root[data-theme='dark'] .coch_warning { background: rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.28); color: #fcd34d; }
 	.coch_list { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.85rem; }
 	.coch_card {
 		display: flex; align-items: flex-start; gap: 0.75rem;
-		padding: 0.9rem 1rem; background: white;
-		border: 1.5px solid #fecaca; border-radius: 1.15rem;
+		padding: 0.9rem 1rem; background: var(--ecochitas-surface);
+		border: 1.5px solid rgba(239,68,68,0.15); border-radius: 1.15rem;
 		transition: box-shadow 0.15s;
 	}
 	:root[data-theme='dark'] .coch_card { background: rgba(255,255,255,0.04); border-color: rgba(239,68,68,0.18); }
@@ -597,11 +607,11 @@
 	:root[data-theme='dark'] .coch_card_anon { border-color: rgba(245,158,11,0.25) !important; }
 	.coch_avatar {
 		flex-shrink: 0; width: 42px; height: 42px;
-		background: #fee2e2; border: 1.5px solid #fecaca;
+		background: rgba(239,68,68,0.08); border: 1.5px solid rgba(239,68,68,0.2);
 		border-radius: 0.85rem; display: flex; align-items: center; justify-content: center; color: #ef4444;
 	}
 	:root[data-theme='dark'] .coch_avatar { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.25); }
-	.coch_avatar_anon { background: #fffbeb !important; border-color: #fde68a !important; color: #d97706 !important; }
+	.coch_avatar_anon { background: rgba(245,158,11,0.08) !important; border-color: rgba(245,158,11,0.2) !important; color: #d97706 !important; }
 	:root[data-theme='dark'] .coch_avatar_anon { background: rgba(245,158,11,0.12) !important; border-color: rgba(245,158,11,0.28) !important; color: #fbbf24 !important; }
 	.coch_info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.28rem; }
 	.coch_top_row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
@@ -616,13 +626,13 @@
 	:root[data-theme='dark'] .coch_badge { opacity: 0.88; }
 	.coch_meta_row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 	.coch_status { display: inline-flex; align-items: center; font-size: 0.62rem; font-weight: 700; padding: 0.18rem 0.5rem; border-radius: 999px; }
-	.coch_status_multa_pendiente { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+	.coch_status_multa_pendiente { background: rgba(239,68,68,0.08); color: #b91c1c; border: 1px solid rgba(239,68,68,0.2); }
 	:root[data-theme='dark'] .coch_status_multa_pendiente { background: rgba(239,68,68,0.1); color: #fca5a5; border-color: rgba(239,68,68,0.28); }
-	.coch_status_advertencia { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+	.coch_status_advertencia { background: rgba(245,158,11,0.08); color: #92400e; border: 1px solid rgba(245,158,11,0.2); }
 	:root[data-theme='dark'] .coch_status_advertencia { background: rgba(245,158,11,0.1); color: #fcd34d; border-color: rgba(245,158,11,0.28); }
-	.coch_status_investigacion { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+	.coch_status_investigacion { background: rgba(59,130,246,0.08); color: #1e40af; border: 1px solid rgba(59,130,246,0.2); }
 	:root[data-theme='dark'] .coch_status_investigacion { background: rgba(59,130,246,0.1); color: #93c5fd; border-color: rgba(59,130,246,0.28); }
-	.coch_status_sancionado { background: #f5f3ff; color: #4c1d95; border: 1px solid #ddd6fe; }
+	.coch_status_sancionado { background: rgba(124,58,237,0.08); color: #4c1d95; border: 1px solid rgba(124,58,237,0.2); }
 	:root[data-theme='dark'] .coch_status_sancionado { background: rgba(124,58,237,0.1); color: #c4b5fd; border-color: rgba(124,58,237,0.28); }
 	.coch_reincidence { display: inline-flex; align-items: center; gap: 0.28rem; font-size: 0.62rem; font-weight: 700; color: #dc2626; }
 	:root[data-theme='dark'] .coch_reincidence { color: #f87171; }

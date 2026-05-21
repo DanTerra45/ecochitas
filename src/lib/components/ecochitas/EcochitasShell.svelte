@@ -17,7 +17,7 @@
 		{ href: '/map', label: 'Mapa', icon_name: 'map' },
 		{ href: '/recycling', label: 'EcoHub', icon_name: 'recycling' },
 		{ href: '/profile', label: 'Perfil', icon_name: 'profile' },
-		{ href: '/reportar', label: 'Reportar', icon_name: 'alert' }
+		{ href: '/report', label: 'Reportar', icon_name: 'alert' }
 	];
 
 	const route_labels_by_path: Record<string, string> = {
@@ -25,7 +25,7 @@
 		'/map': 'Monitoreo en tiempo real',
 		'/recycling': 'EcoHub · Reciclaje',
 		'/profile': 'Mi Perfil',
-		'/reportar': 'Reportar Infracción'
+		'/report': 'Reportar Infracción'
 	};
 
 	let { children } = $props();
@@ -33,12 +33,47 @@
 	let is_dark_mode = $state(true);
 	let show_notifications = $state(false);
 
-	type Notif = { id: number; type: 'success' | 'alert' | 'info' | 'warn'; title: string; desc: string; time: string; read: boolean };
+	type Notif = {
+		id: number;
+		type: 'success' | 'alert' | 'info' | 'warn';
+		title: string;
+		desc: string;
+		time: string;
+		read: boolean;
+	};
 	const notifications: Notif[] = [
-		{ id: 1, type: 'success', title: 'Validación completada', desc: 'Tu entrega del 15 May fue validada. +120 EcoPoints', time: 'hace 2h', read: false },
-		{ id: 2, type: 'alert', title: 'Reporte procesado', desc: 'Tu denuncia en Av. América fue derivada a la GAMC.', time: 'hace 5h', read: false },
-		{ id: 3, type: 'info', title: 'Nueva recompensa disponible', desc: 'Café La Casona: 20% off disponible para canjear.', time: 'ayer', read: true },
-		{ id: 4, type: 'warn', title: 'Nivel en riesgo', desc: 'Sin actividad en 12 días. Tu nivel podría reducirse.', time: 'hace 2d', read: true }
+		{
+			id: 1,
+			type: 'success',
+			title: 'Validación completada',
+			desc: 'Tu entrega del 15 May fue validada. +120 EcoPoints',
+			time: 'hace 2h',
+			read: false
+		},
+		{
+			id: 2,
+			type: 'alert',
+			title: 'Reporte procesado',
+			desc: 'Tu denuncia en Av. América fue derivada a la GAMC.',
+			time: 'hace 5h',
+			read: false
+		},
+		{
+			id: 3,
+			type: 'info',
+			title: 'Nueva recompensa disponible',
+			desc: 'Café La Casona: 20% off disponible para canjear.',
+			time: 'ayer',
+			read: true
+		},
+		{
+			id: 4,
+			type: 'warn',
+			title: 'Nivel en riesgo',
+			desc: 'Sin actividad en 12 días. Tu nivel podría reducirse.',
+			time: 'hace 2d',
+			read: true
+		}
 	];
 	const unread_count = $derived(notifications.filter((n) => !n.read).length);
 
@@ -105,7 +140,19 @@
 						aria-label="Notificaciones"
 						aria-expanded={show_notifications}
 					>
-						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" style="width:18px;height:18px" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+						<svg
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="1.9"
+							style="width:18px;height:18px"
+							aria-hidden="true"
+							><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path
+								d="M13.73 21a2 2 0 0 1-3.46 0"
+							/></svg
+						>
 						{#if unread_count > 0}
 							<span class="notif_dot">{unread_count}</span>
 						{/if}
@@ -114,20 +161,72 @@
 						<div class="notif_panel">
 							<div class="notif_panel_head">
 								<span class="notif_head_title">Notificaciones</span>
-								{#if unread_count > 0}<span class="notif_head_count">{unread_count} nuevas</span>{/if}
+								{#if unread_count > 0}<span class="notif_head_count">{unread_count} nuevas</span
+									>{/if}
 							</div>
 							<div class="notif_list">
 								{#each notifications as n (n.id)}
 									<div class="notif_item" class:notif_item_unread={!n.read}>
 										<div class="notif_icon notif_icon_{n.type}">
 											{#if n.type === 'success'}
-												<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" style="width:12px;height:12px" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+												<svg
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="2.2"
+													style="width:12px;height:12px"
+													aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg
+												>
 											{:else if n.type === 'alert'}
-												<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" style="width:12px;height:12px" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg>
+												<svg
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="1.9"
+													style="width:12px;height:12px"
+													aria-hidden="true"
+													><path
+														d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"
+													/></svg
+												>
 											{:else if n.type === 'warn'}
-												<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" style="width:12px;height:12px" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+												<svg
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="1.9"
+													style="width:12px;height:12px"
+													aria-hidden="true"
+													><circle cx="12" cy="12" r="10" /><line
+														x1="12"
+														y1="8"
+														x2="12"
+														y2="12"
+													/><line x1="12" y1="16" x2="12.01" y2="16" /></svg
+												>
 											{:else}
-												<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" style="width:12px;height:12px" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+												<svg
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="1.9"
+													style="width:12px;height:12px"
+													aria-hidden="true"
+													><circle cx="12" cy="12" r="10" /><line
+														x1="12"
+														y1="16"
+														x2="12"
+														y2="12"
+													/><line x1="12" y1="8" x2="12.01" y2="8" /></svg
+												>
 											{/if}
 										</div>
 										<div class="notif_body">
@@ -404,70 +503,172 @@
 	}
 
 	/* ── Notification bell ── */
-	.notif_wrap { position: relative; }
+	.notif_wrap {
+		position: relative;
+	}
 	.notif_btn {
 		position: relative;
-		background: transparent; border: none;
-		color: var(--ecochitas-muted); cursor: pointer;
-		display: grid; place-items: center;
-		padding: 0.5rem; border-radius: 50%;
-		transition: color 0.2s ease, background-color 0.2s ease;
+		background: transparent;
+		border: none;
+		color: var(--ecochitas-muted);
+		cursor: pointer;
+		display: grid;
+		place-items: center;
+		padding: 0.5rem;
+		border-radius: 50%;
+		transition:
+			color 0.2s ease,
+			background-color 0.2s ease;
 	}
-	.notif_btn:hover { color: var(--ecochitas-ink); background-color: var(--ecochitas-border); }
+	.notif_btn:hover {
+		color: var(--ecochitas-ink);
+		background-color: var(--ecochitas-border);
+	}
 	.notif_dot {
-		position: absolute; top: 2px; right: 2px;
-		min-width: 16px; height: 16px; padding: 0 3px;
-		background: #ef4444; color: white;
-		font-size: 0.58rem; font-weight: 800;
-		border-radius: 999px; display: flex; align-items: center; justify-content: center;
+		position: absolute;
+		top: 2px;
+		right: 2px;
+		min-width: 16px;
+		height: 16px;
+		padding: 0 3px;
+		background: #ef4444;
+		color: white;
+		font-size: 0.58rem;
+		font-weight: 800;
+		border-radius: 999px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		font-family: 'Sora', sans-serif;
 		border: 1.5px solid var(--ecochitas-nav-bg);
 		pointer-events: none;
 	}
 	.notif_panel {
-		position: absolute; top: calc(100% + 0.75rem); right: -0.5rem;
+		position: absolute;
+		top: calc(100% + 0.75rem);
+		right: -0.5rem;
 		width: min(310px, calc(100vw - 2rem));
 		background: var(--ecochitas-nav-bg);
-		backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
 		border: 1px solid var(--ecochitas-nav-border);
 		border-radius: 1.2rem;
 		box-shadow: var(--ecochitas-shadow-float);
-		overflow: hidden; z-index: 100;
+		overflow: hidden;
+		z-index: 100;
 	}
 	.notif_panel_head {
-		display: flex; align-items: center; justify-content: space-between;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
 		padding: 0.85rem 1rem 0.65rem;
 		border-bottom: 1px solid var(--ecochitas-nav-border);
 	}
-	.notif_head_title { font-size: 0.85rem; font-weight: 800; color: var(--ecochitas-ink); font-family: 'Sora', sans-serif; }
-	.notif_head_count { font-size: 0.68rem; font-weight: 800; background: #ef4444; color: white; padding: 0.15rem 0.5rem; border-radius: 999px; font-family: 'Sora', sans-serif; }
-	.notif_list { display: flex; flex-direction: column; max-height: 280px; overflow-y: auto; }
+	.notif_head_title {
+		font-size: 0.85rem;
+		font-weight: 800;
+		color: var(--ecochitas-ink);
+		font-family: 'Sora', sans-serif;
+	}
+	.notif_head_count {
+		font-size: 0.68rem;
+		font-weight: 800;
+		background: #ef4444;
+		color: white;
+		padding: 0.15rem 0.5rem;
+		border-radius: 999px;
+		font-family: 'Sora', sans-serif;
+	}
+	.notif_list {
+		display: flex;
+		flex-direction: column;
+		max-height: 280px;
+		overflow-y: auto;
+	}
 	.notif_item {
-		display: flex; align-items: flex-start; gap: 0.65rem;
+		display: flex;
+		align-items: flex-start;
+		gap: 0.65rem;
 		padding: 0.72rem 1rem;
 		border-bottom: 1px solid var(--ecochitas-nav-border);
 		position: relative;
 		transition: background 0.15s;
 	}
-	.notif_item:last-child { border-bottom: none; }
-	.notif_item_unread { background: color-mix(in srgb, var(--ecochitas-leaf) 5%, transparent); }
-	.notif_icon {
-		flex-shrink: 0; width: 28px; height: 28px;
-		border-radius: 50%; display: flex; align-items: center; justify-content: center;
+	.notif_item:last-child {
+		border-bottom: none;
 	}
-	.notif_icon_success { background: #dcfce7; color: #16a34a; }
-	:root[data-theme='dark'] .notif_icon_success { background: rgba(34,197,94,0.15); }
-	.notif_icon_alert { background: #fef2f2; color: #ef4444; }
-	:root[data-theme='dark'] .notif_icon_alert { background: rgba(239,68,68,0.15); }
-	.notif_icon_warn { background: #fffbeb; color: #d97706; }
-	:root[data-theme='dark'] .notif_icon_warn { background: rgba(217,119,6,0.15); }
-	.notif_icon_info { background: #eff6ff; color: #3b82f6; }
-	:root[data-theme='dark'] .notif_icon_info { background: rgba(59,130,246,0.15); }
-	.notif_body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
-	.notif_title { font-size: 0.76rem; font-weight: 800; color: var(--ecochitas-ink); font-family: 'Sora', sans-serif; line-height: 1.2; }
-	.notif_desc { font-size: 0.7rem; color: var(--ecochitas-muted); line-height: 1.4; margin: 0; }
-	.notif_time { font-size: 0.62rem; color: var(--ecochitas-muted); }
-	.notif_unread_dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--ecochitas-leaf); margin-top: 5px; }
+	.notif_item_unread {
+		background: color-mix(in srgb, var(--ecochitas-leaf) 5%, transparent);
+	}
+	.notif_icon {
+		flex-shrink: 0;
+		width: 28px;
+		height: 28px;
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.notif_icon_success {
+		background: #dcfce7;
+		color: #16a34a;
+	}
+	:root[data-theme='dark'] .notif_icon_success {
+		background: rgba(34, 197, 94, 0.15);
+	}
+	.notif_icon_alert {
+		background: #fef2f2;
+		color: #ef4444;
+	}
+	:root[data-theme='dark'] .notif_icon_alert {
+		background: rgba(239, 68, 68, 0.15);
+	}
+	.notif_icon_warn {
+		background: #fffbeb;
+		color: #d97706;
+	}
+	:root[data-theme='dark'] .notif_icon_warn {
+		background: rgba(217, 119, 6, 0.15);
+	}
+	.notif_icon_info {
+		background: #eff6ff;
+		color: #3b82f6;
+	}
+	:root[data-theme='dark'] .notif_icon_info {
+		background: rgba(59, 130, 246, 0.15);
+	}
+	.notif_body {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+	}
+	.notif_title {
+		font-size: 0.76rem;
+		font-weight: 800;
+		color: var(--ecochitas-ink);
+		font-family: 'Sora', sans-serif;
+		line-height: 1.2;
+	}
+	.notif_desc {
+		font-size: 0.7rem;
+		color: var(--ecochitas-muted);
+		line-height: 1.4;
+		margin: 0;
+	}
+	.notif_time {
+		font-size: 0.62rem;
+		color: var(--ecochitas-muted);
+	}
+	.notif_unread_dot {
+		flex-shrink: 0;
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: var(--ecochitas-leaf);
+		margin-top: 5px;
+	}
 
 	@media (min-width: 1024px) {
 		.ecochitas_page {

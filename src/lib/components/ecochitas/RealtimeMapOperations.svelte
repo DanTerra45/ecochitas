@@ -1,6 +1,17 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import {
+		MapLibre,
+		RasterTileSource,
+		RasterLayer,
+		GeoJSONSource,
+		LineLayer,
+		CircleLayer,
+		Marker,
+		Popup
+	} from 'svelte-maplibre-gl';
 	import { SvelteMap } from 'svelte/reactivity';
+	import type * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 
 	type Truck_latest_position = {
@@ -165,6 +176,20 @@
 		materials: string;
 	};
 
+	type Active_map_popup_state = {
+		lnglat: [number, number];
+		popup_html: string;
+		associated_truck_identifier: string | null;
+		open: boolean;
+	};
+
+	type Truck_motion_animation_state = {
+		start_coordinates: [number, number];
+		end_coordinates: [number, number];
+		started_at_unix_milliseconds: number;
+		duration_milliseconds: number;
+	};
+
 	const cochabamba_center_latitude = -17.3935;
 	const cochabamba_center_longitude = -66.157;
 	const default_backend_api_base_url = 'http://127.0.0.1:8080';
@@ -183,6 +208,10 @@
 	const truck_route_snap_distance_threshold_meters = 250;
 	const truck_route_snap_segment_window_radius = 6;
 	const truck_route_snap_max_jump_meters = 90;
+	const truck_motion_instant_jump_threshold_meters = 400;
+	const truck_motion_min_duration_milliseconds = 240;
+	const truck_motion_max_duration_milliseconds = 1400;
+	const truck_motion_milliseconds_per_meter = 12;
 	const meters_per_degree_latitude = 110540;
 	const route_line_color_palette = [
 		'#16a34a',
@@ -196,89 +225,232 @@
 	];
 
 	const mock_smart_bins: SmartBin[] = [
-		{ id: 'b01', label: 'Contenedor A-01', lat: -17.3835, lng: -66.1570, capacity_pct: 45, zone: 'Zona Norte', last_updated: 'hace 12 min' },
-		{ id: 'b02', label: 'Contenedor A-02', lat: -17.3855, lng: -66.1610, capacity_pct: 88, zone: 'Zona Norte', last_updated: 'hace 8 min' },
-		{ id: 'b03', label: 'Contenedor B-01', lat: -17.3910, lng: -66.1640, capacity_pct: 32, zone: 'Zona Central', last_updated: 'hace 5 min' },
-		{ id: 'b04', label: 'Contenedor B-02', lat: -17.3930, lng: -66.1510, capacity_pct: 91, zone: 'Zona Central', last_updated: 'hace 3 min' },
-		{ id: 'b05', label: 'Contenedor C-01', lat: -17.3985, lng: -66.1580, capacity_pct: 60, zone: 'Zona Sur', last_updated: 'hace 20 min' },
-		{ id: 'b06', label: 'Contenedor C-02', lat: -17.4010, lng: -66.1555, capacity_pct: 78, zone: 'Zona Sur', last_updated: 'hace 15 min' },
-		{ id: 'b07', label: 'Contenedor D-01', lat: -17.3872, lng: -66.1490, capacity_pct: 95, zone: 'Zona Este', last_updated: 'hace 2 min' },
-		{ id: 'b08', label: 'Contenedor D-02', lat: -17.3900, lng: -66.1460, capacity_pct: 22, zone: 'Zona Este', last_updated: 'hace 30 min' },
-		{ id: 'b09', label: 'Contenedor E-01', lat: -17.3960, lng: -66.1690, capacity_pct: 55, zone: 'Zona Oeste', last_updated: 'hace 18 min' },
-		{ id: 'b10', label: 'Contenedor E-02', lat: -17.4005, lng: -66.1720, capacity_pct: 83, zone: 'Zona Oeste', last_updated: 'hace 10 min' }
+		{
+			id: 'b01',
+			label: 'Contenedor A-01',
+			lat: -17.3835,
+			lng: -66.157,
+			capacity_pct: 45,
+			zone: 'Zona Norte',
+			last_updated: 'hace 12 min'
+		},
+		{
+			id: 'b02',
+			label: 'Contenedor A-02',
+			lat: -17.3855,
+			lng: -66.161,
+			capacity_pct: 88,
+			zone: 'Zona Norte',
+			last_updated: 'hace 8 min'
+		},
+		{
+			id: 'b03',
+			label: 'Contenedor B-01',
+			lat: -17.391,
+			lng: -66.164,
+			capacity_pct: 32,
+			zone: 'Zona Central',
+			last_updated: 'hace 5 min'
+		},
+		{
+			id: 'b04',
+			label: 'Contenedor B-02',
+			lat: -17.393,
+			lng: -66.151,
+			capacity_pct: 91,
+			zone: 'Zona Central',
+			last_updated: 'hace 3 min'
+		},
+		{
+			id: 'b05',
+			label: 'Contenedor C-01',
+			lat: -17.3985,
+			lng: -66.158,
+			capacity_pct: 60,
+			zone: 'Zona Sur',
+			last_updated: 'hace 20 min'
+		},
+		{
+			id: 'b06',
+			label: 'Contenedor C-02',
+			lat: -17.401,
+			lng: -66.1555,
+			capacity_pct: 78,
+			zone: 'Zona Sur',
+			last_updated: 'hace 15 min'
+		},
+		{
+			id: 'b07',
+			label: 'Contenedor D-01',
+			lat: -17.3872,
+			lng: -66.149,
+			capacity_pct: 95,
+			zone: 'Zona Este',
+			last_updated: 'hace 2 min'
+		},
+		{
+			id: 'b08',
+			label: 'Contenedor D-02',
+			lat: -17.39,
+			lng: -66.146,
+			capacity_pct: 22,
+			zone: 'Zona Este',
+			last_updated: 'hace 30 min'
+		},
+		{
+			id: 'b09',
+			label: 'Contenedor E-01',
+			lat: -17.396,
+			lng: -66.169,
+			capacity_pct: 55,
+			zone: 'Zona Oeste',
+			last_updated: 'hace 18 min'
+		},
+		{
+			id: 'b10',
+			label: 'Contenedor E-02',
+			lat: -17.4005,
+			lng: -66.172,
+			capacity_pct: 83,
+			zone: 'Zona Oeste',
+			last_updated: 'hace 10 min'
+		}
 	];
 
 	const mock_acopio_points: AcopioMarker[] = [
-		{ id: 'a01', name: 'Centro de Acopio Norte', address: 'Av. América 2345', zone: 'Zona Norte', schedule: 'Lun–Sáb 8:00–18:00', lat: -17.3840, lng: -66.1600, capacity_pct: 45, materials: 'Plástico · Papel · Cartón · Vidrio' },
-		{ id: 'a02', name: 'Acopio Villa Pagador', address: 'Calle Sucre 1100', zone: 'Zona Sur', schedule: 'Mar–Dom 9:00–17:00', lat: -17.4020, lng: -66.1560, capacity_pct: 70, materials: 'Metal · Electrónico · Plástico' },
-		{ id: 'a03', name: 'Acopio Queru Queru', address: 'Av. Blanco Galindo km 3', zone: 'Zona Oeste', schedule: 'Lun–Vie 7:00–16:00', lat: -17.3950, lng: -66.1700, capacity_pct: 30, materials: 'Orgánico · Papel · Cartón' },
-		{ id: 'a04', name: 'Acopio Colón', address: 'Plaza Colón 500', zone: 'Zona Central', schedule: 'Lun–Dom 8:00–20:00', lat: -17.3925, lng: -66.1565, capacity_pct: 85, materials: 'Plástico · Vidrio · Metal · Aceite' },
-		{ id: 'a05', name: 'Acopio Muyurina', address: 'Av. Aniceto Arce 800', zone: 'Zona Este', schedule: 'Mié–Dom 10:00–18:00', lat: -17.3875, lng: -66.1480, capacity_pct: 55, materials: 'Pilas · Electrónico · Plástico' }
+		{
+			id: 'a01',
+			name: 'Centro de Acopio Norte',
+			address: 'Av. América 2345',
+			zone: 'Zona Norte',
+			schedule: 'Lun–Sáb 8:00–18:00',
+			lat: -17.384,
+			lng: -66.16,
+			capacity_pct: 45,
+			materials: 'Plástico · Papel · Cartón · Vidrio'
+		},
+		{
+			id: 'a02',
+			name: 'Acopio Villa Pagador',
+			address: 'Calle Sucre 1100',
+			zone: 'Zona Sur',
+			schedule: 'Mar–Dom 9:00–17:00',
+			lat: -17.402,
+			lng: -66.156,
+			capacity_pct: 70,
+			materials: 'Metal · Electrónico · Plástico'
+		},
+		{
+			id: 'a03',
+			name: 'Acopio Queru Queru',
+			address: 'Av. Blanco Galindo km 3',
+			zone: 'Zona Oeste',
+			schedule: 'Lun–Vie 7:00–16:00',
+			lat: -17.395,
+			lng: -66.17,
+			capacity_pct: 30,
+			materials: 'Orgánico · Papel · Cartón'
+		},
+		{
+			id: 'a04',
+			name: 'Acopio Colón',
+			address: 'Plaza Colón 500',
+			zone: 'Zona Central',
+			schedule: 'Lun–Dom 8:00–20:00',
+			lat: -17.3925,
+			lng: -66.1565,
+			capacity_pct: 85,
+			materials: 'Plástico · Vidrio · Metal · Aceite'
+		},
+		{
+			id: 'a05',
+			name: 'Acopio Muyurina',
+			address: 'Av. Aniceto Arce 800',
+			zone: 'Zona Este',
+			schedule: 'Mié–Dom 10:00–18:00',
+			lat: -17.3875,
+			lng: -66.148,
+			capacity_pct: 55,
+			materials: 'Pilas · Electrónico · Plástico'
+		}
 	];
 
-	function get_map_style(is_dark: boolean): import('maplibre-gl').StyleSpecification {
-		const tile_url = is_dark
+	function get_base_tile_url(is_dark: boolean): string {
+		return is_dark
 			? 'https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png'
 			: 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
-
-		return {
-			version: 8,
-			sources: {
-				base_tiles: {
-					type: 'raster',
-					tiles: [tile_url],
-					tileSize: 256,
-					attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
-				}
-			},
-			layers: [
-				{
-					id: 'base_layer',
-					type: 'raster',
-					source: 'base_tiles',
-					minzoom: 0,
-					maxzoom: 22
-				}
-			]
-		};
 	}
+
+	const empty_map_style: maplibregl.StyleSpecification = {
+		version: 8,
+		sources: {},
+		layers: []
+	};
+
+	const user_marker_coordinates: [number, number] = [
+		cochabamba_center_longitude - 0.0015,
+		cochabamba_center_latitude + 0.005
+	];
 
 	let latest_positions_list = $state<Truck_latest_position[]>([]);
 	let collection_routes_list = $state<Collection_route_view[]>([]);
-	let map_container_element = $state<HTMLDivElement | null>(null);
 	let backend_api_base_url = $state(default_backend_api_base_url);
+	let is_dark_map_theme = $state(false);
+	let map_canvas_cursor = $state('');
+	let map_instance = $state<maplibregl.Map | undefined>(undefined);
 
-	let maplibre_library: typeof import('maplibre-gl') | null = null;
-	let map_instance: import('maplibre-gl').Map | null = null;
-	let map_resize_observer: ResizeObserver | null = null;
 	let truck_stream_connection: EventSource | null = null;
-	let map_popup_instance: import('maplibre-gl').Popup | null = null;
-	let user_marker_instance: import('maplibre-gl').Marker | null = null;
-	let active_truck_popup_identifier: string | null = null;
 	let should_keep_stream_connected = false;
 	let stream_reconnect_timeout_identifier: number | null = null;
-	let has_registered_layer_interactions = false;
+	let active_map_popup_state = $state<Active_map_popup_state | null>(null);
+
 	let latest_positions_by_truck_identifier = new SvelteMap<string, Truck_latest_position>();
 	let latest_snap_state_by_truck_identifier = new SvelteMap<string, Truck_route_snap_state>();
+	let rendered_coordinates_by_truck_identifier = new SvelteMap<string, [number, number]>();
+	let active_motion_by_truck_identifier = new Map<string, Truck_motion_animation_state>();
+	let truck_motion_frame_request_identifier: number | null = null;
+
+	let truck_feature_collection = $state<Truck_feature_collection>({
+		type: 'FeatureCollection',
+		features: []
+	});
+	let collection_route_line_feature_collection = $state<Collection_route_line_feature_collection>({
+		type: 'FeatureCollection',
+		features: []
+	});
+	let collection_route_stop_feature_collection = $state<Collection_route_stop_feature_collection>({
+		type: 'FeatureCollection',
+		features: []
+	});
+	let smart_bin_feature_collection = $state<GeoJSON.FeatureCollection>({
+		type: 'FeatureCollection',
+		features: []
+	});
+	let acopio_feature_collection = $state<GeoJSON.FeatureCollection>({
+		type: 'FeatureCollection',
+		features: []
+	});
+
 	let theme_observer: MutationObserver | null = null;
+
+	const base_tile_url = $derived(get_base_tile_url(is_dark_map_theme));
+
 	onMount(async () => {
 		resolve_backend_api_base_url();
-		await initialize_map();
-		setup_map_resize_observer();
+		is_dark_map_theme =
+			typeof document !== 'undefined' && document.documentElement.dataset.theme === 'dark';
 		setup_theme_observer();
+		recompute_static_feature_collections();
 		await Promise.all([load_latest_positions_snapshot(), load_collection_routes_snapshot()]);
-		add_user_marker();
 		should_keep_stream_connected = true;
 		connect_truck_stream();
 	});
 
 	onDestroy(() => {
 		should_keep_stream_connected = false;
+		stop_truck_motion_loop();
 		clear_stream_reconnect_timeout();
 		disconnect_truck_stream();
-		user_marker_instance?.remove();
-		user_marker_instance = null;
-		destroy_map();
 		theme_observer?.disconnect();
 	});
 
@@ -313,9 +485,7 @@
 
 		if (runtime_hostname) {
 			backend_api_base_url = normalize_backend_api_base_url(
-				is_local_runtime_host
-					? `${runtime_protocol}//${runtime_hostname}:8080`
-					: runtime_url.origin
+				is_local_runtime_host ? `${runtime_protocol}//${runtime_hostname}:8080` : runtime_url.origin
 			);
 		}
 	}
@@ -329,85 +499,11 @@
 		theme_observer = new MutationObserver((mutations) => {
 			for (const mutation of mutations) {
 				if (mutation.attributeName === 'data-theme') {
-					apply_map_theme(document.documentElement.dataset.theme === 'dark');
+					is_dark_map_theme = document.documentElement.dataset.theme === 'dark';
 				}
 			}
 		});
 		theme_observer.observe(document.documentElement, { attributes: true });
-	}
-
-	function apply_map_theme(is_dark: boolean) {
-		if (!map_instance) return;
-
-		if (!map_instance.isStyleLoaded()) {
-			map_instance.once('styledata', () => apply_map_theme(is_dark));
-			return;
-		}
-
-		map_instance.setStyle(get_map_style(is_dark));
-
-		map_instance.once('style.load', () => {
-			has_registered_layer_interactions = false;
-			ensure_layers_ready();
-			sync_truck_source_data();
-			sync_collection_route_source_data();
-			sync_smart_bin_source_data();
-			sync_acopio_source_data();
-		});
-	}
-
-	async function initialize_map() {
-		if (!map_container_element || map_instance) {
-			return;
-		}
-
-		maplibre_library = await import('maplibre-gl');
-		const is_dark_initially =
-			typeof document !== 'undefined' && document.documentElement.dataset.theme === 'dark';
-
-		map_instance = new maplibre_library.Map({
-			container: map_container_element,
-			style: get_map_style(is_dark_initially),
-			center: [cochabamba_center_longitude, cochabamba_center_latitude],
-			zoom: 13,
-			attributionControl: false
-		});
-
-		map_instance.on('load', () => {
-			ensure_layers_ready();
-			sync_truck_source_data();
-			sync_collection_route_source_data();
-			sync_smart_bin_source_data();
-			sync_acopio_source_data();
-		});
-	}
-
-	function setup_map_resize_observer() {
-		if (!map_container_element || !map_instance) {
-			return;
-		}
-
-		map_resize_observer = new ResizeObserver(() => {
-			if (!map_instance) {
-				return;
-			}
-			map_instance.resize();
-		});
-		map_resize_observer.observe(map_container_element);
-	}
-
-	function destroy_map() {
-		map_resize_observer?.disconnect();
-		map_resize_observer = null;
-
-		map_popup_instance?.remove();
-		map_popup_instance = null;
-		has_registered_layer_interactions = false;
-
-		if (map_instance) {
-			map_instance.remove();
-			map_instance = null;
-		}
 	}
 
 	function build_snapshot_endpoint_url(): string {
@@ -452,6 +548,9 @@
 	function replace_positions_from_snapshot(snapshot_items: Truck_latest_position[]) {
 		latest_positions_by_truck_identifier.clear();
 		latest_snap_state_by_truck_identifier.clear();
+		rendered_coordinates_by_truck_identifier.clear();
+		active_motion_by_truck_identifier.clear();
+		stop_truck_motion_loop();
 
 		for (const truck_position_item of snapshot_items) {
 			latest_positions_by_truck_identifier.set(
@@ -461,12 +560,13 @@
 		}
 
 		sync_positions_list_from_map();
-		sync_truck_source_data();
+		recompute_truck_feature_collection({ animate: false });
 	}
 
 	function replace_routes_from_snapshot(route_items: Collection_route_view[]) {
 		collection_routes_list = route_items;
-		sync_collection_route_source_data();
+		recompute_route_feature_collections();
+		recompute_truck_feature_collection({ animate: false });
 	}
 
 	function upsert_truck_position(truck_position_item: Truck_latest_position) {
@@ -485,7 +585,7 @@
 			truck_position_item
 		);
 		sync_positions_list_from_map();
-		sync_truck_source_data();
+		recompute_truck_feature_collection({ animate: true });
 	}
 
 	function is_truck_position_captured_after(
@@ -512,401 +612,311 @@
 		);
 	}
 
-	function ensure_layers_ready() {
-		ensure_truck_layers_ready();
-		ensure_collection_route_layers_ready();
-		ensure_smart_bin_layers_ready();
-		ensure_acopio_layers_ready();
+	function recompute_static_feature_collections() {
+		smart_bin_feature_collection = build_smart_bin_feature_collection();
+		acopio_feature_collection = build_acopio_feature_collection();
 	}
 
-	function ensure_truck_layers_ready() {
-		if (!map_instance) {
-			return;
-		}
-
-		if (!map_instance.getSource(truck_positions_source_identifier)) {
-			map_instance.addSource(truck_positions_source_identifier, {
-				type: 'geojson',
-				data: build_truck_feature_collection() as unknown as GeoJSON.FeatureCollection
-			});
-		}
-
-		if (!map_instance.getLayer(truck_positions_circle_layer_identifier)) {
-			map_instance.addLayer({
-				id: truck_positions_circle_layer_identifier,
-				type: 'circle',
-				source: truck_positions_source_identifier,
-				paint: {
-					'circle-color': '#18a26e',
-					'circle-radius': 7,
-					'circle-stroke-color': '#0a5e4a',
-					'circle-stroke-width': 2.2,
-					'circle-opacity': 0.95
-				}
-			});
-		}
-
-		if (!has_registered_layer_interactions) {
-			register_layer_interactions();
-			has_registered_layer_interactions = true;
-		}
+	function recompute_route_feature_collections() {
+		collection_route_line_feature_collection = build_collection_route_line_feature_collection();
+		collection_route_stop_feature_collection = build_collection_route_stop_feature_collection();
 	}
 
-	function ensure_collection_route_layers_ready() {
-		if (!map_instance) {
-			return;
-		}
-
-		if (!map_instance.getSource(collection_routes_source_identifier)) {
-			map_instance.addSource(collection_routes_source_identifier, {
-				type: 'geojson',
-				data: build_collection_route_line_feature_collection() as unknown as GeoJSON.FeatureCollection
-			});
-		}
-
-		if (!map_instance.getLayer(collection_routes_line_layer_identifier)) {
-			map_instance.addLayer({
-				id: collection_routes_line_layer_identifier,
-				type: 'line',
-				source: collection_routes_source_identifier,
-				paint: {
-					'line-color': ['coalesce', ['get', 'line_color'], '#0284c7'],
-					'line-width': 4,
-					'line-opacity': 0.85
-				},
-				layout: {
-					'line-join': 'round',
-					'line-cap': 'round'
-				}
-			});
-		}
-
-		if (!map_instance.getSource(collection_route_stops_source_identifier)) {
-			map_instance.addSource(collection_route_stops_source_identifier, {
-				type: 'geojson',
-				data: build_collection_route_stop_feature_collection() as unknown as GeoJSON.FeatureCollection
-			});
-		}
-
-		if (!map_instance.getLayer(collection_route_stops_circle_layer_identifier)) {
-			map_instance.addLayer({
-				id: collection_route_stops_circle_layer_identifier,
-				type: 'circle',
-				source: collection_route_stops_source_identifier,
-				paint: {
-					'circle-color': '#f8fafc',
-					'circle-radius': 4.2,
-					'circle-stroke-color': '#0f172a',
-					'circle-stroke-width': 1.2,
-					'circle-opacity': 0.95
-				}
-			});
-		}
-
-		if (!has_registered_layer_interactions) {
-			register_layer_interactions();
-			has_registered_layer_interactions = true;
-		}
-	}
-
-	function ensure_smart_bin_layers_ready() {
-		if (!map_instance) return;
-
-		if (!map_instance.getSource(smart_bins_source_identifier)) {
-			map_instance.addSource(smart_bins_source_identifier, {
-				type: 'geojson',
-				data: build_smart_bin_feature_collection() as unknown as GeoJSON.FeatureCollection
-			});
-		}
-
-		if (!map_instance.getLayer(smart_bins_circle_layer_identifier)) {
-			map_instance.addLayer({
-				id: smart_bins_circle_layer_identifier,
-				type: 'circle',
-				source: smart_bins_source_identifier,
-				paint: {
-					'circle-color': [
-						'case',
-						['>=', ['get', 'capacity_pct'], 80], '#ef4444',
-						['>=', ['get', 'capacity_pct'], 60], '#f59e0b',
-						'#16a34a'
-					],
-					'circle-radius': 6,
-					'circle-stroke-color': [
-						'case',
-						['>=', ['get', 'capacity_pct'], 80], '#991b1b',
-						['>=', ['get', 'capacity_pct'], 60], '#92400e',
-						'#14532d'
-					],
-					'circle-stroke-width': 1.8,
-					'circle-opacity': 0.92
-				}
-			});
-		}
-	}
-
-	function ensure_acopio_layers_ready() {
-		if (!map_instance) return;
-
-		if (!map_instance.getSource(acopio_points_source_identifier)) {
-			map_instance.addSource(acopio_points_source_identifier, {
-				type: 'geojson',
-				data: build_acopio_feature_collection() as unknown as GeoJSON.FeatureCollection
-			});
-		}
-
-		if (!map_instance.getLayer(acopio_points_circle_layer_identifier)) {
-			map_instance.addLayer({
-				id: acopio_points_circle_layer_identifier,
-				type: 'circle',
-				source: acopio_points_source_identifier,
-				paint: {
-					'circle-color': '#0284c7',
-					'circle-radius': 8,
-					'circle-stroke-color': '#075985',
-					'circle-stroke-width': 2,
-					'circle-opacity': 0.9
-				}
-			});
-		}
-	}
-
-	function sync_truck_source_data() {
-		if (!map_instance || !map_instance.isStyleLoaded()) {
-			return;
-		}
-
-		ensure_truck_layers_ready();
-
-		const truck_positions_source = map_instance.getSource(truck_positions_source_identifier) as
-			| import('maplibre-gl').GeoJSONSource
-			| undefined;
-		if (!truck_positions_source) {
-			return;
-		}
-
-		truck_positions_source.setData(
-			build_truck_feature_collection() as unknown as GeoJSON.FeatureCollection
-		);
-
-		update_active_truck_popup_position();
-	}
-
-	function update_active_truck_popup_position() {
-		if (!map_popup_instance || !active_truck_popup_identifier) {
-			return;
-		}
-		const latest_truck_position = latest_positions_by_truck_identifier.get(
-			active_truck_popup_identifier
-		);
-		if (!latest_truck_position) {
-			return;
-		}
-		const snapped_truck_coordinates =
-			resolve_truck_coordinates_snapped_to_nearest_route(latest_truck_position);
-		map_popup_instance.setLngLat(
-			snapped_truck_coordinates ?? [latest_truck_position.longitude, latest_truck_position.latitude]
-		);
-		map_popup_instance.setHTML(
-			build_truck_marker_popup_html(latest_truck_position, snapped_truck_coordinates)
+	function resolve_motion_duration_milliseconds(distance_meters: number): number {
+		const projected_duration = distance_meters * truck_motion_milliseconds_per_meter;
+		return Math.max(
+			truck_motion_min_duration_milliseconds,
+			Math.min(truck_motion_max_duration_milliseconds, projected_duration)
 		);
 	}
 
-	function sync_collection_route_source_data() {
-		if (!map_instance || !map_instance.isStyleLoaded()) {
-			return;
-		}
-
-		ensure_collection_route_layers_ready();
-
-		const collection_routes_source = map_instance.getSource(collection_routes_source_identifier) as
-			| import('maplibre-gl').GeoJSONSource
-			| undefined;
-		if (collection_routes_source) {
-			collection_routes_source.setData(
-				build_collection_route_line_feature_collection() as unknown as GeoJSON.FeatureCollection
-			);
-		}
-
-		const collection_route_stops_source = map_instance.getSource(
-			collection_route_stops_source_identifier
-		) as import('maplibre-gl').GeoJSONSource | undefined;
-		if (collection_route_stops_source) {
-			collection_route_stops_source.setData(
-				build_collection_route_stop_feature_collection() as unknown as GeoJSON.FeatureCollection
-			);
-		}
+	function smoothstep_unit_interval(raw_value: number): number {
+		const clamped_value = Math.max(0, Math.min(1, raw_value));
+		return clamped_value * clamped_value * (3 - 2 * clamped_value);
 	}
 
-	function sync_smart_bin_source_data() {
-		if (!map_instance || !map_instance.isStyleLoaded()) return;
-		ensure_smart_bin_layers_ready();
-		const src = map_instance.getSource(smart_bins_source_identifier) as
-			| import('maplibre-gl').GeoJSONSource
-			| undefined;
-		src?.setData(build_smart_bin_feature_collection() as unknown as GeoJSON.FeatureCollection);
-	}
-
-	function sync_acopio_source_data() {
-		if (!map_instance || !map_instance.isStyleLoaded()) return;
-		ensure_acopio_layers_ready();
-		const src = map_instance.getSource(acopio_points_source_identifier) as
-			| import('maplibre-gl').GeoJSONSource
-			| undefined;
-		src?.setData(build_acopio_feature_collection() as unknown as GeoJSON.FeatureCollection);
-	}
-
-	function register_layer_interactions() {
-		if (!map_instance || !maplibre_library) {
-			return;
-		}
-
-		const clickable_layers = [
-			truck_positions_circle_layer_identifier,
-			collection_routes_line_layer_identifier,
-			collection_route_stops_circle_layer_identifier,
-			smart_bins_circle_layer_identifier,
-			acopio_points_circle_layer_identifier
+	function lerp_coordinates(
+		start_coordinates: [number, number],
+		end_coordinates: [number, number],
+		t: number
+	): [number, number] {
+		return [
+			start_coordinates[0] + (end_coordinates[0] - start_coordinates[0]) * t,
+			start_coordinates[1] + (end_coordinates[1] - start_coordinates[1]) * t
 		];
+	}
 
-		for (const layer_id of clickable_layers) {
-			map_instance.on('mouseenter', layer_id, () => {
-				if (!map_instance) return;
-				map_instance.getCanvas().style.cursor = 'pointer';
-			});
-			map_instance.on('mouseleave', layer_id, () => {
-				if (!map_instance) return;
-				map_instance.getCanvas().style.cursor = '';
+	function is_same_coordinates(
+		left_coordinates: [number, number],
+		right_coordinates: [number, number]
+	): boolean {
+		return (
+			Math.abs(left_coordinates[0] - right_coordinates[0]) < 1e-7 &&
+			Math.abs(left_coordinates[1] - right_coordinates[1]) < 1e-7
+		);
+	}
+
+	function stop_truck_motion_loop() {
+		if (truck_motion_frame_request_identifier == null || typeof window === 'undefined') {
+			truck_motion_frame_request_identifier = null;
+			return;
+		}
+		window.cancelAnimationFrame(truck_motion_frame_request_identifier);
+		truck_motion_frame_request_identifier = null;
+	}
+
+	function ensure_truck_motion_loop() {
+		if (typeof window === 'undefined') {
+			return;
+		}
+		if (truck_motion_frame_request_identifier != null) {
+			return;
+		}
+		truck_motion_frame_request_identifier = window.requestAnimationFrame(
+			run_truck_motion_animation_frame
+		);
+	}
+
+	function run_truck_motion_animation_frame(frame_timestamp: number) {
+		truck_motion_frame_request_identifier = null;
+		if (active_motion_by_truck_identifier.size === 0) {
+			return;
+		}
+
+		let has_pending_motions = false;
+		for (const [truck_identifier, motion_state] of active_motion_by_truck_identifier) {
+			const elapsed_milliseconds = frame_timestamp - motion_state.started_at_unix_milliseconds;
+			const raw_progress =
+				motion_state.duration_milliseconds <= 0
+					? 1
+					: elapsed_milliseconds / motion_state.duration_milliseconds;
+			const eased_progress = smoothstep_unit_interval(raw_progress);
+			const next_coordinates = lerp_coordinates(
+				motion_state.start_coordinates,
+				motion_state.end_coordinates,
+				eased_progress
+			);
+			rendered_coordinates_by_truck_identifier.set(truck_identifier, next_coordinates);
+
+			if (raw_progress >= 1) {
+				rendered_coordinates_by_truck_identifier.set(
+					truck_identifier,
+					motion_state.end_coordinates
+				);
+				active_motion_by_truck_identifier.delete(truck_identifier);
+			} else {
+				has_pending_motions = true;
+			}
+		}
+
+		truck_feature_collection = build_truck_feature_collection();
+		refresh_active_truck_popup_if_needed();
+
+		if (has_pending_motions && typeof window !== 'undefined') {
+			truck_motion_frame_request_identifier = window.requestAnimationFrame(
+				run_truck_motion_animation_frame
+			);
+		}
+	}
+
+	function get_target_truck_coordinates(
+		truck_position_item: Truck_latest_position,
+		route_line_candidate_list: Route_line_candidate[]
+	): [number, number] {
+		const snapped_truck_coordinates = resolve_truck_coordinates_snapped_to_route_candidates(
+			truck_position_item,
+			route_line_candidate_list
+		);
+		return (
+			snapped_truck_coordinates ?? [truck_position_item.longitude, truck_position_item.latitude]
+		);
+	}
+
+	function update_rendered_truck_coordinates(animate: boolean) {
+		const route_line_candidate_list = build_route_line_candidate_list();
+		const seen_truck_identifiers = new Set<string>();
+
+		const now_milliseconds = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+		for (const truck_position_item of latest_positions_list) {
+			const truck_identifier = truck_position_item.truck_identifier;
+			seen_truck_identifiers.add(truck_identifier);
+
+			const next_target_coordinates = get_target_truck_coordinates(
+				truck_position_item,
+				route_line_candidate_list
+			);
+			const current_rendered_coordinates =
+				rendered_coordinates_by_truck_identifier.get(truck_identifier);
+
+			if (!current_rendered_coordinates || !animate) {
+				rendered_coordinates_by_truck_identifier.set(truck_identifier, next_target_coordinates);
+				active_motion_by_truck_identifier.delete(truck_identifier);
+				continue;
+			}
+
+			const distance_to_target_meters = calculate_distance_meters_between_coordinates(
+				current_rendered_coordinates,
+				next_target_coordinates
+			);
+			if (
+				distance_to_target_meters <= 0.7 ||
+				distance_to_target_meters >= truck_motion_instant_jump_threshold_meters
+			) {
+				rendered_coordinates_by_truck_identifier.set(truck_identifier, next_target_coordinates);
+				active_motion_by_truck_identifier.delete(truck_identifier);
+				continue;
+			}
+
+			const existing_motion = active_motion_by_truck_identifier.get(truck_identifier);
+			if (
+				existing_motion &&
+				is_same_coordinates(existing_motion.end_coordinates, next_target_coordinates)
+			) {
+				continue;
+			}
+
+			active_motion_by_truck_identifier.set(truck_identifier, {
+				start_coordinates: current_rendered_coordinates,
+				end_coordinates: next_target_coordinates,
+				started_at_unix_milliseconds: now_milliseconds,
+				duration_milliseconds: resolve_motion_duration_milliseconds(distance_to_target_meters)
 			});
 		}
 
-		map_instance.on('click', truck_positions_circle_layer_identifier, (layer_mouse_event) => {
-			const clicked_feature = layer_mouse_event.features?.[0];
-			if (!clicked_feature || !map_instance || !maplibre_library) return;
-			if (clicked_feature.geometry.type !== 'Point') return;
-			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
-			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html);
-		});
+		const known_identifiers = Array.from(rendered_coordinates_by_truck_identifier.keys());
+		for (const truck_identifier of known_identifiers) {
+			if (seen_truck_identifiers.has(truck_identifier)) {
+				continue;
+			}
+			rendered_coordinates_by_truck_identifier.delete(truck_identifier);
+			active_motion_by_truck_identifier.delete(truck_identifier);
+			latest_snap_state_by_truck_identifier.delete(truck_identifier);
+		}
 
-		map_instance.on('click', collection_routes_line_layer_identifier, (layer_mouse_event) => {
-			const clicked_feature = layer_mouse_event.features?.[0];
-			if (!clicked_feature || !map_instance || !maplibre_library) return;
-			if (clicked_feature.geometry.type !== 'LineString') return;
-			const clicked_coordinates = layer_mouse_event.lngLat.toArray() as [number, number];
-			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html, null);
-		});
-
-		map_instance.on('click', collection_route_stops_circle_layer_identifier, (layer_mouse_event) => {
-			const clicked_feature = layer_mouse_event.features?.[0];
-			if (!clicked_feature || !map_instance || !maplibre_library) return;
-			if (clicked_feature.geometry.type !== 'Point') return;
-			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
-			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html);
-		});
-
-		map_instance.on('click', smart_bins_circle_layer_identifier, (layer_mouse_event) => {
-			const clicked_feature = layer_mouse_event.features?.[0];
-			if (!clicked_feature || !map_instance || !maplibre_library) return;
-			if (clicked_feature.geometry.type !== 'Point') return;
-			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
-			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html);
-		});
-
-		map_instance.on('click', acopio_points_circle_layer_identifier, (layer_mouse_event) => {
-			const clicked_feature = layer_mouse_event.features?.[0];
-			if (!clicked_feature || !map_instance || !maplibre_library) return;
-			if (clicked_feature.geometry.type !== 'Point') return;
-			const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
-			const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
-			open_popup(clicked_coordinates, popup_html, null);
-		});
+		if (active_motion_by_truck_identifier.size > 0) {
+			ensure_truck_motion_loop();
+		} else {
+			stop_truck_motion_loop();
+		}
 	}
 
-	function open_popup(
-		clicked_coordinates: [number, number],
+	function recompute_truck_feature_collection(options: { animate: boolean }) {
+		update_rendered_truck_coordinates(options.animate);
+		truck_feature_collection = build_truck_feature_collection();
+		refresh_active_truck_popup_if_needed();
+	}
+
+	function refresh_active_truck_popup_if_needed() {
+		if (!active_map_popup_state?.associated_truck_identifier) {
+			return;
+		}
+
+		const tracked_truck_identifier = active_map_popup_state.associated_truck_identifier;
+		const latest_truck_position =
+			latest_positions_by_truck_identifier.get(tracked_truck_identifier);
+		if (!latest_truck_position) {
+			active_map_popup_state = null;
+			return;
+		}
+
+		const rendered_coordinates = rendered_coordinates_by_truck_identifier.get(
+			tracked_truck_identifier
+		) ?? [latest_truck_position.longitude, latest_truck_position.latitude];
+		active_map_popup_state = {
+			...active_map_popup_state,
+			lnglat: rendered_coordinates,
+			popup_html: build_truck_marker_popup_html(latest_truck_position)
+		};
+	}
+
+	function set_active_popup_state(
+		lnglat: [number, number],
 		popup_html: string,
 		associated_truck_identifier: string | null = null
 	) {
-		if (!map_instance || !maplibre_library) return;
-
-		map_popup_instance?.remove();
-		active_truck_popup_identifier = associated_truck_identifier;
-
-		map_popup_instance = new maplibre_library.Popup({
-			closeButton: true,
-			closeOnClick: true,
-			offset: 16,
-			maxWidth: '280px'
-		})
-			.setLngLat(clicked_coordinates)
-			.setHTML(popup_html)
-			.addTo(map_instance);
-		map_popup_instance.on('close', () => {
-			active_truck_popup_identifier = null;
-			map_popup_instance = null;
-		});
+		active_map_popup_state = {
+			lnglat,
+			popup_html,
+			associated_truck_identifier,
+			open: true
+		};
 	}
 
-	function add_user_marker() {
-		if (!map_instance || !maplibre_library) return;
+	function clear_active_popup_state() {
+		active_map_popup_state = null;
+	}
 
-		const el = document.createElement('div');
-		el.style.cssText = 'position:relative;width:20px;height:20px;cursor:default;';
+	function on_layer_pointer_enter() {
+		map_canvas_cursor = 'pointer';
+	}
 
-		const pulse = document.createElement('div');
-		pulse.style.cssText = [
-			'position:absolute;top:50%;left:50%;',
-			'width:36px;height:36px;',
-			'margin:-18px 0 0 -18px;',
-			'border-radius:50%;',
-			'background:rgba(59,130,246,0.25);',
-			'animation:eco_pulse 2s ease-out infinite;'
-		].join('');
+	function on_layer_pointer_leave() {
+		map_canvas_cursor = '';
+	}
 
-		const dot = document.createElement('div');
-		dot.style.cssText = [
-			'position:absolute;top:50%;left:50%;',
-			'width:14px;height:14px;',
-			'margin:-7px 0 0 -7px;',
-			'border-radius:50%;',
-			'background:#3b82f6;',
-			'border:3px solid #fff;',
-			'box-shadow:0 2px 8px rgba(59,130,246,0.6);'
-		].join('');
-
-		el.appendChild(pulse);
-		el.appendChild(dot);
-
-		const style_el = document.getElementById('eco_pulse_style');
-		if (!style_el) {
-			const s = document.createElement('style');
-			s.id = 'eco_pulse_style';
-			s.textContent = '@keyframes eco_pulse{0%{transform:scale(0.6);opacity:0.8}70%{transform:scale(1.8);opacity:0}100%{transform:scale(2.2);opacity:0}}';
-			document.head.appendChild(s);
+	function on_truck_layer_click(layer_mouse_event: maplibregl.MapLayerMouseEvent) {
+		const clicked_feature = layer_mouse_event.features?.[0];
+		if (!clicked_feature || clicked_feature.geometry.type !== 'Point') {
+			return;
 		}
+		const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
+		const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
+		const truck_identifier_value = String(clicked_feature.properties?.['truck_identifier'] ?? '');
+		set_active_popup_state(
+			clicked_coordinates,
+			popup_html,
+			truck_identifier_value.length > 0 ? truck_identifier_value : null
+		);
+	}
 
-		user_marker_instance = new maplibre_library.Marker({ element: el })
-			.setLngLat([cochabamba_center_longitude - 0.0015, cochabamba_center_latitude + 0.005])
-			.setPopup(new maplibre_library.Popup({ offset: 20, maxWidth: '220px' }).setHTML(build_user_popup_html()))
-			.addTo(map_instance);
+	function on_collection_route_layer_click(layer_mouse_event: maplibregl.MapLayerMouseEvent) {
+		const clicked_feature = layer_mouse_event.features?.[0];
+		if (!clicked_feature || clicked_feature.geometry.type !== 'LineString') {
+			return;
+		}
+		const clicked_coordinates = layer_mouse_event.lngLat.toArray() as [number, number];
+		const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
+		set_active_popup_state(clicked_coordinates, popup_html, null);
+	}
+
+	function on_route_stop_layer_click(layer_mouse_event: maplibregl.MapLayerMouseEvent) {
+		const clicked_feature = layer_mouse_event.features?.[0];
+		if (!clicked_feature || clicked_feature.geometry.type !== 'Point') {
+			return;
+		}
+		const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
+		const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
+		set_active_popup_state(clicked_coordinates, popup_html, null);
+	}
+
+	function on_smart_bin_layer_click(layer_mouse_event: maplibregl.MapLayerMouseEvent) {
+		const clicked_feature = layer_mouse_event.features?.[0];
+		if (!clicked_feature || clicked_feature.geometry.type !== 'Point') {
+			return;
+		}
+		const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
+		const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
+		set_active_popup_state(clicked_coordinates, popup_html, null);
+	}
+
+	function on_acopio_layer_click(layer_mouse_event: maplibregl.MapLayerMouseEvent) {
+		const clicked_feature = layer_mouse_event.features?.[0];
+		if (!clicked_feature || clicked_feature.geometry.type !== 'Point') {
+			return;
+		}
+		const clicked_coordinates = clicked_feature.geometry.coordinates as [number, number];
+		const popup_html = String(clicked_feature.properties?.['popup_html'] ?? '');
+		set_active_popup_state(clicked_coordinates, popup_html, null);
 	}
 
 	function build_truck_feature_collection(): Truck_feature_collection {
-		const route_line_candidate_list = build_route_line_candidate_list();
-
 		return {
 			type: 'FeatureCollection',
 			features: latest_positions_list.map((truck_position_item) => {
-				const snapped_truck_coordinates = resolve_truck_coordinates_snapped_to_route_candidates(
-					truck_position_item,
-					route_line_candidate_list
-				);
-				const display_truck_coordinates =
-					snapped_truck_coordinates ?? [truck_position_item.longitude, truck_position_item.latitude];
+				const display_truck_coordinates = rendered_coordinates_by_truck_identifier.get(
+					truck_position_item.truck_identifier
+				) ?? [truck_position_item.longitude, truck_position_item.latitude];
 
 				return {
 					type: 'Feature',
@@ -920,10 +930,7 @@
 						longitude: display_truck_coordinates[0],
 						speed_kmh: truck_position_item.speed_kmh ?? null,
 						captured_at: truck_position_item.captured_at,
-						popup_html: build_truck_marker_popup_html(
-							truck_position_item,
-							snapped_truck_coordinates
-						)
+						popup_html: build_truck_marker_popup_html(truck_position_item)
 					}
 				};
 			})
@@ -969,7 +976,8 @@
 		collection_route_item: Collection_route_view
 	): [number, number][] {
 		const sorted_path_coordinates = [...collection_route_item.path_coordinates].sort(
-			(left_coordinate, right_coordinate) => left_coordinate.stop_order - right_coordinate.stop_order
+			(left_coordinate, right_coordinate) =>
+				left_coordinate.stop_order - right_coordinate.stop_order
 		);
 		const fallback_line_coordinates = sorted_path_coordinates.map((route_coordinate) => [
 			route_coordinate.longitude,
@@ -997,16 +1005,6 @@
 		}
 
 		return route_line_candidate_list;
-	}
-
-	function resolve_truck_coordinates_snapped_to_nearest_route(
-		truck_position_item: Truck_latest_position
-	): [number, number] | null {
-		const route_line_candidate_list = build_route_line_candidate_list();
-		return resolve_truck_coordinates_snapped_to_route_candidates(
-			truck_position_item,
-			route_line_candidate_list
-		);
 	}
 
 	function resolve_truck_coordinates_snapped_to_route_candidates(
@@ -1145,10 +1143,8 @@
 		const segment_end_latitude = segment_end_coordinates[1];
 
 		const reference_latitude_radians =
-			((point_latitude + segment_start_latitude + segment_end_latitude) / 3) *
-			(Math.PI / 180);
-		const meters_per_degree_longitude =
-			111320 * Math.cos(reference_latitude_radians);
+			((point_latitude + segment_start_latitude + segment_end_latitude) / 3) * (Math.PI / 180);
+		const meters_per_degree_longitude = 111320 * Math.cos(reference_latitude_radians);
 
 		const segment_delta_x_meters =
 			(segment_end_longitude - segment_start_longitude) * meters_per_degree_longitude;
@@ -1179,8 +1175,7 @@
 
 		const snapped_delta_x_meters =
 			(point_longitude - snapped_longitude) * meters_per_degree_longitude;
-		const snapped_delta_y_meters =
-			(point_latitude - snapped_latitude) * meters_per_degree_latitude;
+		const snapped_delta_y_meters = (point_latitude - snapped_latitude) * meters_per_degree_latitude;
 		const snapped_distance_meters = Math.sqrt(
 			snapped_delta_x_meters * snapped_delta_x_meters +
 				snapped_delta_y_meters * snapped_delta_y_meters
@@ -1244,7 +1239,7 @@
 		};
 	}
 
-	function build_smart_bin_feature_collection() {
+	function build_smart_bin_feature_collection(): GeoJSON.FeatureCollection {
 		return {
 			type: 'FeatureCollection',
 			features: mock_smart_bins.map((bin) => ({
@@ -1262,7 +1257,7 @@
 		};
 	}
 
-	function build_acopio_feature_collection() {
+	function build_acopio_feature_collection(): GeoJSON.FeatureCollection {
 		return {
 			type: 'FeatureCollection',
 			features: mock_acopio_points.map((pt) => ({
@@ -1288,8 +1283,7 @@
 	function hash_string(raw_text: string): number {
 		let hash_accumulator = 0;
 		for (let character_index = 0; character_index < raw_text.length; character_index += 1) {
-			hash_accumulator =
-				(hash_accumulator * 31 + raw_text.charCodeAt(character_index)) >>> 0;
+			hash_accumulator = (hash_accumulator * 31 + raw_text.charCodeAt(character_index)) >>> 0;
 		}
 		return hash_accumulator;
 	}
@@ -1316,16 +1310,16 @@
 		return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:0.72rem;font-weight:700;color:${color};background:${bg}">${text}</span>`;
 	}
 
-	function build_truck_marker_popup_html(
-		truck_position_item: Truck_latest_position,
-		snapped_truck_coordinates: [number, number] | null = null
-	): string {
+	function build_truck_marker_popup_html(truck_position_item: Truck_latest_position): string {
 		const speed_label =
 			truck_position_item.speed_kmh == null ? 'N/A' : `${truck_position_item.speed_kmh} km/h`;
 		const rows = [
 			popup_row('ID', truck_position_item.truck_identifier),
 			popup_row('Velocidad', speed_label),
-			popup_row('Lat / Lng', `${truck_position_item.latitude.toFixed(4)}, ${truck_position_item.longitude.toFixed(4)}`),
+			popup_row(
+				'Lat / Lng',
+				`${truck_position_item.latitude.toFixed(4)}, ${truck_position_item.longitude.toFixed(4)}`
+			),
 			popup_row('Actualizado', truck_position_item.captured_at)
 		].join('');
 		return popup_card('🚛', 'Carro recolector', rows);
@@ -1333,7 +1327,9 @@
 
 	function build_collection_route_popup_html(collection_route_item: Collection_route_view): string {
 		const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-		const day_label = days[collection_route_item.collection_weekday] ?? String(collection_route_item.collection_weekday);
+		const day_label =
+			days[collection_route_item.collection_weekday] ??
+			String(collection_route_item.collection_weekday);
 		const rows = [
 			popup_row('Código', collection_route_item.route_code),
 			popup_row('Zona', collection_route_item.zone_name),
@@ -1369,10 +1365,7 @@
 				<div style="height:100%;width:${cap}%;background:${status_color};border-radius:999px"></div>
 			</div>
 		</div>`;
-		const rows = [
-			popup_row('Zona', bin.zone),
-			popup_row('Actualizado', bin.last_updated)
-		].join('');
+		const rows = [popup_row('Zona', bin.zone), popup_row('Actualizado', bin.last_updated)].join('');
 		const badge = popup_badge(status_label, status_color, status_bg);
 		return popup_card('🗑️', bin.label, `${badge}${bar}${rows}`);
 	}
@@ -1400,10 +1393,13 @@
 	}
 
 	function build_user_popup_html(): string {
-		return popup_card('📍', 'Estás aquí', [
-			popup_row('Zona', 'Zona Norte'),
-			popup_row('Acopio más cercano', 'Av. América 2345')
-		].join(''));
+		return popup_card(
+			'📍',
+			'Estás aquí',
+			[popup_row('Zona', 'Zona Norte'), popup_row('Acopio más cercano', 'Av. América 2345')].join(
+				''
+			)
+		);
 	}
 
 	function clear_stream_reconnect_timeout() {
@@ -1485,7 +1481,154 @@
 	}
 </script>
 
-<div bind:this={map_container_element} class="map_fullscreen"></div>
+{#snippet user_marker_content()}
+	<div class="user_marker_shell" aria-hidden="true">
+		<span class="user_marker_pulse"></span>
+		<span class="user_marker_dot"></span>
+	</div>
+{/snippet}
+
+<MapLibre
+	bind:map={map_instance}
+	class="map_fullscreen"
+	style={empty_map_style}
+	center={[cochabamba_center_longitude, cochabamba_center_latitude]}
+	zoom={13}
+	attributionControl={false}
+	cursor={map_canvas_cursor}
+	autoloadGlobalCss={false}
+>
+	<RasterTileSource
+		id="base_tiles"
+		tiles={[base_tile_url]}
+		tileSize={256}
+		attribution="&copy; OpenStreetMap contributors &copy; CARTO"
+	>
+		<RasterLayer id="base_layer" minzoom={0} maxzoom={22} />
+	</RasterTileSource>
+
+	<GeoJSONSource
+		id={collection_routes_source_identifier}
+		data={collection_route_line_feature_collection}
+	>
+		<LineLayer
+			id={collection_routes_line_layer_identifier}
+			paint={{
+				'line-color': ['coalesce', ['get', 'line_color'], '#0284c7'],
+				'line-width': 4,
+				'line-opacity': 0.85
+			}}
+			layout={{
+				'line-join': 'round',
+				'line-cap': 'round'
+			}}
+			onmouseenter={on_layer_pointer_enter}
+			onmouseleave={on_layer_pointer_leave}
+			onclick={on_collection_route_layer_click}
+		/>
+	</GeoJSONSource>
+
+	<GeoJSONSource
+		id={collection_route_stops_source_identifier}
+		data={collection_route_stop_feature_collection}
+	>
+		<CircleLayer
+			id={collection_route_stops_circle_layer_identifier}
+			paint={{
+				'circle-color': '#f8fafc',
+				'circle-radius': 4.2,
+				'circle-stroke-color': '#0f172a',
+				'circle-stroke-width': 1.2,
+				'circle-opacity': 0.95
+			}}
+			onmouseenter={on_layer_pointer_enter}
+			onmouseleave={on_layer_pointer_leave}
+			onclick={on_route_stop_layer_click}
+		/>
+	</GeoJSONSource>
+
+	<GeoJSONSource id={truck_positions_source_identifier} data={truck_feature_collection}>
+		<CircleLayer
+			id={truck_positions_circle_layer_identifier}
+			paint={{
+				'circle-color': '#18a26e',
+				'circle-radius': 7,
+				'circle-stroke-color': '#0a5e4a',
+				'circle-stroke-width': 2.2,
+				'circle-opacity': 0.95
+			}}
+			onmouseenter={on_layer_pointer_enter}
+			onmouseleave={on_layer_pointer_leave}
+			onclick={on_truck_layer_click}
+		/>
+	</GeoJSONSource>
+
+	<GeoJSONSource id={smart_bins_source_identifier} data={smart_bin_feature_collection}>
+		<CircleLayer
+			id={smart_bins_circle_layer_identifier}
+			paint={{
+				'circle-color': [
+					'case',
+					['>=', ['get', 'capacity_pct'], 80],
+					'#ef4444',
+					['>=', ['get', 'capacity_pct'], 60],
+					'#f59e0b',
+					'#16a34a'
+				],
+				'circle-radius': 6,
+				'circle-stroke-color': [
+					'case',
+					['>=', ['get', 'capacity_pct'], 80],
+					'#991b1b',
+					['>=', ['get', 'capacity_pct'], 60],
+					'#92400e',
+					'#14532d'
+				],
+				'circle-stroke-width': 1.8,
+				'circle-opacity': 0.92
+			}}
+			onmouseenter={on_layer_pointer_enter}
+			onmouseleave={on_layer_pointer_leave}
+			onclick={on_smart_bin_layer_click}
+		/>
+	</GeoJSONSource>
+
+	<GeoJSONSource id={acopio_points_source_identifier} data={acopio_feature_collection}>
+		<CircleLayer
+			id={acopio_points_circle_layer_identifier}
+			paint={{
+				'circle-color': '#0284c7',
+				'circle-radius': 8,
+				'circle-stroke-color': '#075985',
+				'circle-stroke-width': 2,
+				'circle-opacity': 0.9
+			}}
+			onmouseenter={on_layer_pointer_enter}
+			onmouseleave={on_layer_pointer_leave}
+			onclick={on_acopio_layer_click}
+		/>
+	</GeoJSONSource>
+
+	<Marker lnglat={user_marker_coordinates} content={user_marker_content}>
+		<Popup offset={20} maxWidth="220px">
+			{@html build_user_popup_html()}
+		</Popup>
+	</Marker>
+
+	{#if active_map_popup_state}
+		<Popup
+			lnglat={active_map_popup_state.lnglat}
+			bind:open={active_map_popup_state.open}
+			closeButton={true}
+			closeOnClick={true}
+			offset={16}
+			maxWidth="280px"
+			onclose={clear_active_popup_state}
+		>
+			{@html active_map_popup_state.popup_html}
+		</Popup>
+	{/if}
+</MapLibre>
 
 <div class="map_status_panel">
 	<div>API: {backend_api_base_url}</div>
@@ -1528,13 +1671,62 @@
 </div>
 
 <style>
-	.map_fullscreen {
+	:global(.map_fullscreen) {
 		position: fixed;
 		top: 0;
 		left: 0;
 		width: 100vw;
 		height: 100vh;
 		z-index: 0;
+	}
+
+	.user_marker_shell {
+		position: relative;
+		width: 20px;
+		height: 20px;
+		cursor: default;
+	}
+
+	.user_marker_pulse {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		width: 36px;
+		height: 36px;
+		margin: -18px 0 0 -18px;
+		border-radius: 50%;
+		background: rgba(59, 130, 246, 0.25);
+		animation: eco_pulse 2s ease-out infinite;
+	}
+
+	.user_marker_dot {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		width: 14px;
+		height: 14px;
+		margin: -7px 0 0 -7px;
+		border-radius: 50%;
+		background: #3b82f6;
+		border: 3px solid #fff;
+		box-shadow: 0 2px 8px rgba(59, 130, 246, 0.6);
+	}
+
+	@keyframes eco_pulse {
+		0% {
+			transform: scale(0.6);
+			opacity: 0.8;
+		}
+
+		70% {
+			transform: scale(1.8);
+			opacity: 0;
+		}
+
+		100% {
+			transform: scale(2.2);
+			opacity: 0;
+		}
 	}
 
 	.map_status_panel {
